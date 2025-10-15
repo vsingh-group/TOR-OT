@@ -1,0 +1,7 @@
+# Custom training configuration
+num_epochs: 75
+batch_size: 6
+learning_rate: 2e-4
+use_amp: true
+grad_accumulation: 2
+world_size: null 

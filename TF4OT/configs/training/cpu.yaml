@@ -1,0 +1,9 @@
+# CPU training configuration for local development
+num_epochs: 5  # Fewer epochs for quick testing
+batch_size: 8  # Larger batch size since we're not GPU memory constrained
+learning_rate: 1e-3  # Slightly higher learning rate for faster convergence
+use_amp: false  # No AMP on CPU
+grad_accumulation: 1
+
+# Distributed training settings
+world_size: 1  # Single process for CPU training 

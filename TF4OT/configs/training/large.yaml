@@ -1,0 +1,9 @@
+# Large model training configuration
+num_epochs: 200
+batch_size: 1
+learning_rate: 5e-5
+use_amp: true
+grad_accumulation: 4
+
+# Distributed training settings
+world_size: null  # Will use torch.cuda.device_count() if null 

@@ -1,0 +1,40 @@
+attrs
+
+# autodiff
+numpy
+jax
+jaxlib
+torch
+scikit-learn
+tokenizers
+transformers
+sentencepiece
+#torchvision
+#torchaudio
+
+# solvers
+# POT was installed via conda using the command: conda install -c conda-forge pot
+# full documentation: https://github.com/PythonOT/POT?tab=readme-ov-file#anaconda-installation-with-conda-forge
+POT
+
+#plotting
+matplotlib
+
+#configs 
+gin-config
+ordered-set
+jaxtyping
+tqdm
+parameterized
+absl-py
+# Hydra configuration system dependencies
+hydra-core
+omegaconf
+
+# Optional: For better YAML support and validation
+pyyaml
+jsonschema
+
+# datasets
+datasets
+huggingface_hub

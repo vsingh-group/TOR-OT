@@ -1,0 +1,177 @@
+# Global Configuration for Decoder4OT Training
+# This file provides a complete overview of all available configuration options
+
+# =============================================================================
+# GLOBAL SETTINGS
+# =============================================================================
+
+# Data directory path
+data_dir: "./decoder4ot/experiments/singletarget/ot_sample_data/n_10k/support_10"
+
+# Model save path (null = use default directory)
+model_save_path: null
+
+# =============================================================================
+# MODEL CONFIGURATION
+# =============================================================================
+model:
+  # Model save directory
+  save_path: "./decoder4ot/experiments/singletarget/trained_models"
+  
+  # Encoder configuration
+  encoder:
+    # Output dimension of the encoder
+    output_dim: 128
+    # Support size for distribution encoding
+    dist_support_size: 10
+    # Embedding dimension for encoder
+    embedding_dim: 20
+  
+  # Decoder configuration
+  decoder:
+    # Number of units in transformer layers
+    units: 256
+    # Number of transformer layers
+    num_transformer_layers: 4
+    # Number of attention heads
+    num_attention_heads: 4
+    # Dropout rate
+    dropout: 0.1
+
+# =============================================================================
+# TRAINING CONFIGURATION
+# =============================================================================
+training:
+  # Number of training epochs
+  num_epochs: 50
+  # Batch size for training
+  batch_size: 8
+  # Learning rate
+  learning_rate: 0.0002
+  # Whether to use Automatic Mixed Precision (AMP)
+  use_amp: true
+  # Gradient accumulation steps
+  grad_accumulation: 1
+  # Number of GPUs for distributed training (null = auto-detect)
+  world_size: null
+
+# =============================================================================
+# TOKENIZER CONFIGURATION
+# =============================================================================
+tokenizer:
+  # Number of exponent digits for floating point encoding
+  num_exponent_digits: 2
+  # Number of mantissa digits for floating point encoding
+  num_mantissa_digits: 6
+
+# =============================================================================
+# DATA CONFIGURATION
+# =============================================================================
+data:
+  # Data directory path
+  data_dir: "./decoder4ot/experiments/singletarget/ot_sample_data/n_10k/support_10"
+  
+  # Dataset parameters
+  dataset:
+    # Total number of samples in the dataset
+    size: 10000
+    # Support size of the distributions
+    support_size: 10
+    # Dimension of input features
+    feature_dim: 21
+    # Dimension of target values
+    target_dim: 1
+    # Number of target distributions per sample
+    num_targets: 1
+  
+  # Data splitting parameters
+  splitting:
+    # Fraction of data to use for testing
+    test_size: 0.2
+    # Fraction of data to use for validation
+    validation_size: 0.1
+    # Random seed for reproducible splits
+    random_state: 42
+    # Whether to shuffle data before splitting
+    shuffle: true
+  
+  # Data loading parameters
+  loading:
+    # Batch size (null = use training.batch_size)
+    batch_size: null
+    # Number of workers for data loading
+    num_workers: 24
+    # Whether to pin memory for faster GPU transfer
+    pin_memory: true
+    # Whether to drop incomplete batches
+    drop_last: false
+    # Whether to shuffle data during training
+    shuffle: true
+  
+  # Data preprocessing parameters
+  preprocessing:
+    # Whether to normalize input features
+    normalize_features: false
+    # Whether to normalize target values
+    normalize_targets: false
+    # Scaling method for features: "none", "standard", "minmax"
+    feature_scaling: "none"
+    # Scaling method for targets: "none", "standard", "minmax"
+    target_scaling: "none"
+
+# =============================================================================
+# HYDRA CONFIGURATION
+# =============================================================================
+hydra:
+  # Output directory configuration
+  run:
+    # Directory for single runs
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  # Sweep configuration for hyperparameter tuning
+  sweep:
+    # Directory for multi-runs
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    # Subdirectory for each job
+    subdir: ${hydra.job.num}
+
+# =============================================================================
+# CONFIGURATION VARIANTS
+# =============================================================================
+# This section documents the available configuration variants
+
+# Training variants:
+# - training=default: Standard training (100 epochs, batch size 2, lr 1e-4)
+# - training=fast: Quick training (10 epochs, batch size 4, lr 1e-3, AMP enabled)
+# - training=large: Large model training (200 epochs, batch size 1, lr 5e-5)
+# - training=cpu: CPU-optimized training (5 epochs, batch size 8, lr 1e-3, no AMP)
+
+# Model variants:
+# - model=default: Standard model (encoder: 256 output dim, decoder: 512 units, 8 layers)
+# - model=fast: Fast model (encoder: 128 output dim, decoder: 256 units, 4 layers)
+# - model=cpu: CPU-optimized model (encoder: 64 output dim, decoder: 128 units, 2 layers)
+
+# Data variants:
+# - data=default: Standard dataset (10k samples, support 10, feature dim 21)
+# - data=small: Small dataset (1k samples, support 5, feature dim 21)
+# - data=large: Large dataset (50k samples, support 20, feature dim 21)
+# - data=cpu: CPU-optimized dataset (5k samples, support 10, feature dim 21)
+
+# =============================================================================
+# USAGE EXAMPLES
+# =============================================================================
+# Basic usage:
+#   python -m decoder4ot.train_regression_singletarget_hydra
+#
+# Fast training:
+#   python -m decoder4ot.train_regression_singletarget_hydra training=fast model=fast
+#
+# CPU training:
+#   python -m decoder4ot.train_regression_singletarget_hydra training=cpu model=cpu data=cpu
+#
+# Large dataset with fast training:
+#   python -m decoder4ot.train_regression_singletarget_hydra data=large training=fast
+#
+# Parameter overrides:
+#   python -m decoder4ot.train_regression_singletarget_hydra training.num_epochs=50 training.batch_size=8
+#   python -m decoder4ot.train_regression_singletarget_hydra model.decoder.units=256 model.encoder.output_dim=128
+#   python -m decoder4ot.train_regression_singletarget_hydra data.dataset.size=5000 data.loading.num_workers=16 

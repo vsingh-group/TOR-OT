@@ -1,0 +1,433 @@
+#!/usr/bin/env python3
+"""
+Script to create and save a Hugging Face dataset for Optimal Transport (OT) mapping.
+
+This script generates synthetic data for learning optimal transport mappings between
+probability distributions using sparse matrix representations.
+"""
+
+#import numpy as np
+import ot
+import torch
+import argparse
+import numpy as np
+import scipy.sparse as sp
+from typing import Dict
+from tqdm.auto import tqdm
+from datasets import Dataset, DatasetDict
+from huggingface_hub import HfApi, create_repo
+
+# # Provide missing aliases for older code
+# if not hasattr(np, "Inf"): np.Inf = np.inf
+# if not hasattr(np, "PINF"): np.PINF = np.inf
+# if not hasattr(np, "NINF"): np.NINF = -np.inf
+# if not hasattr(np, "NaN"): np.NaN = np.nan
+# if not hasattr(np, "NAN"): np.NAN = np.nan
+# if not hasattr(np, "Infinity"): np.Infinity = np.inf
+
+def coo_row_to_string(A, j, precision=3, suppress_small=True):
+    """
+    Format row j of a COO sparse matrix as:
+        [i0,j0,v0,i0,j1,v1,...]
+    with i and j as integers, v as float with fixed precision.
+
+    Note: Even if index_mode='normalized' was used elsewhere,
+    this function *outputs ints for i,j* (as requested).
+    """
+    if not sp.isspmatrix_coo(A):
+        A = A.tocoo(copy=False)
+
+    mask = (A.row == j)
+    if not np.any(mask):
+        return "[]"
+
+    cols = A.col[mask].astype(int, copy=False)
+    vals = A.data[mask].astype(float, copy=False)
+
+    # # zero-suppress values (but keep coords)
+    # if suppress_small:
+    #     thresh = 10.0 ** (-precision)
+    #     vals = np.where(np.abs(vals) < thresh, 0.0, vals)
+
+    # zero-suppress values and their corresponding coordinates
+    if suppress_small:
+        thresh = 10.0 ** (-precision)
+        # Create mask for values that should be kept (not suppressed)
+        keep_mask = np.abs(vals) >= thresh
+        # Filter both columns and values to remove suppressed entries
+        cols = cols[keep_mask]
+        vals = vals[keep_mask]        
+
+    # Build string parts: i (int), j (int), v (float)
+    fmt_v = f"{{:.{precision}f}}"
+    parts = []
+    i_int = int(j)
+
+    for jj, vv in zip(cols, vals):
+        parts.append(str(int(jj)))
+        parts.append(fmt_v.format(vv))
+
+    return "[" + ",".join(parts) + "]"
+
+def generate_ot_sample_generator(n_bins: int, dataset_size: int, device: str = 'cpu', precision: int = 3):
+    """
+    Generator function that yields individual samples for the optimal transport dataset.
+    
+    Args:
+        n_bins: Number of bins for discretization
+        dataset_size: Number of samples to generate
+        device: Device to use for tensor operations
+        precision: Precision for sparse matrix string formatting
+
+    Yields:
+        Dictionary containing a single sample
+    """
+
+    my_dtype_np=np.float64
+    my_dtype_torch=torch.float64
+
+    print(f"Generating {dataset_size} samples with {n_bins} bins...")
+
+    # Generate source and target distributions
+    print("Generating source and target distributions...")
+    source_dist = np.array([np.random.uniform(size=n_bins) for _ in range(dataset_size)])
+    source_dist = source_dist / source_dist.sum(axis=1, keepdims=True)
+    
+    target_dist = np.array([np.random.uniform(size=n_bins) for _ in range(dataset_size)])
+    target_dist = target_dist / target_dist.sum(axis=1, keepdims=True)
+
+    # Generate OT maps
+    print("Computing optimal transport maps...")
+    source_support = np.arange(n_bins, dtype=my_dtype_np)
+    target_support = np.arange(n_bins, dtype=my_dtype_np)
+
+    ot_plan_emd_sparse = np.array([
+        ot.emd_1d(source_support, target_support, 
+                  source_dist[i], target_dist[i], dense=False) 
+        for i in tqdm(range(dataset_size))
+    ])
+    ot_plan_emd_dense = np.array([
+        ot.emd_1d(source_support, target_support, 
+                  source_dist[i], target_dist[i], dense=True) 
+        for i in tqdm(range(dataset_size))
+    ])
+    C = ot.dist(source_support, target_support)
+    ot_plan_solve = ot.solve(C, a=source_dist[i], b=target_dist[i]).plan
+
+
+    # Yield individual samples
+    print("Yielding samples...")
+    for i in tqdm(range(dataset_size), desc="Processing samples"):
+        for j in range(n_bins):
+            # Source distribution
+            source_dist_tensor = torch.tensor(source_dist[i], dtype=my_dtype_torch).tolist()
+
+            # Target distribution
+            target_dist_tensor = torch.tensor(target_dist[i], dtype=my_dtype_torch).tolist()
+
+            # Input index (normalized row position)
+            input_idx = [j / n_bins]
+
+            # Combined input (source + target + row_id)
+            total_input = torch.hstack((
+                torch.tensor(source_dist[i], dtype=my_dtype_torch),
+                torch.tensor(target_dist[i], dtype=my_dtype_torch),
+                torch.tensor([j / n_bins],   dtype=my_dtype_torch)
+            )).to(my_dtype_torch)
+
+            total_input = total_input.to(device=device)
+
+            total_input_list = total_input.tolist()
+
+            # Sparse OT map row
+            output_map_sparse = coo_row_to_string(ot_plan_emd_sparse[i], j, precision=precision)
+
+            # Yield the sample
+            yield {
+                'source_dist': source_dist_tensor,
+                'target_dist': target_dist_tensor,
+                'input_idx': input_idx,
+                'total_input': total_input_list,
+                'output_map_sparse': output_map_sparse
+            }
+
+def create_dataset_metadata(n_bins: int, dataset_size: int) -> Dict:
+    """Create metadata for the dataset."""
+    return {
+        "description": "Optimal Transport Dataset for Learning Sparse Transport Mappings",
+        "version": "1.0.0",
+        "n_bins": n_bins,
+        "dataset_size": dataset_size,
+        "features": {
+            "source_dist": {
+                "description": "Source probability distribution",
+                "dtype": "float32",
+                "shape": [n_bins]
+            },
+            "target_dist": {
+                "description": "Target probability distribution", 
+                "dtype": "float32",
+                "shape": [n_bins]
+            },
+            "input_idx": {
+                "description": "Normalized row index (0-1)",
+                "dtype": "float32",
+                "shape": [1]
+            },
+            "total_input": {
+                "description": "Concatenated input: source + target + row_idx",
+                "dtype": "float32", 
+                "shape": [2 * n_bins + 1]
+            },
+            "output_map_sparse": {
+                "description": "Sparse representation of OT map row as string",
+                "dtype": "string"
+            }
+        },
+        "task": "optimal_transport",
+        "domain": "mathematics",
+        "license": "MIT"
+    }
+
+
+def upload_to_huggingface(dataset_dict, repo_name: str, token: str = None, private: bool = False):
+    """Upload dataset to Hugging Face Hub."""
+    try:
+        print(f"🚀 Uploading dataset to Hugging Face Hub: {repo_name}")
+        dataset_dict.push_to_hub(
+            repo_id=repo_name,
+            token=token,
+            private=private,
+            commit_message="Upload Optimal Transport dataset"
+        )
+        print(f"✅ Dataset uploaded successfully to https://huggingface.co/datasets/{repo_name}")
+        return True
+    except Exception as e:
+        print(f"❌ Error uploading dataset: {e}")
+        return False
+
+def create_dataset_card(repo_name: str, n_bins: int, dataset_size: int, output_path: str = "README.md"):
+    """Create a dataset card (README.md) for the Hugging Face dataset."""
+    
+    card_content = f"""---
+license: mit
+task_categories:
+- other
+language:
+- en
+tags:
+- optimal-transport
+- mathematics
+- sparse-matrices
+- machine-learning
+size_categories:
+- 1M<n<10M
+---
+
+# Optimal Transport Dataset
+
+## Dataset Description
+
+This dataset contains synthetic data for learning optimal transport (OT) mappings between probability distributions using sparse matrix representations. The dataset is designed for training machine learning models to predict optimal transport matrices from source and target probability distributions.
+
+## Dataset Structure
+
+Each sample in the dataset contains:
+
+- **source_dist**: Source probability distribution over discrete bins (list of floats)
+- **target_dist**: Target probability distribution over discrete bins (list of floats)  
+- **input_idx**: Normalized row index [0,1] for which to predict the OT mapping (list with one float)
+- **total_input**: Concatenated input features (source + target + row_idx) (list of floats)
+- **output_map_sparse**: Sparse representation of the corresponding row in the OT mapping matrix as string "[col1,val1,col2,val2,...]"
+
+## Dataset Statistics
+
+- **Number of bins**: {n_bins}
+- **Total samples**: {dataset_size:,}
+- **Train samples**: {int(dataset_size * 0.8):,}
+- **Test samples**: {int(dataset_size * 0.2):,}
+- **Input dimension**: {2 * n_bins + 1}
+- **Sparse format**: COO (Coordinate) format for efficient storage
+
+## Usage
+
+```python
+from datasets import load_dataset
+
+# Load the dataset
+dataset = load_dataset("{repo_name}")
+
+# Access train and test splits
+train_data = dataset['train']
+test_data = dataset['test']
+
+# Get a sample
+sample = train_data[0]
+print(f"Source distribution: {{sample['source_dist']}}")
+print(f"Target distribution: {{sample['target_dist']}}")
+print(f"Input index: {{sample['input_idx']}}")
+print(f"Sparse OT row: {{sample['output_map_sparse']}}")
+```
+
+## Sparse Format
+
+The sparse OT mapping is stored as a string in the format:
+```
+[col1,val1,col2,val2,col3,val3,...]
+```
+
+Where:
+- `col1, col2, col3, ...` are column indices (integers)
+- `val1, val2, val3, ...` are corresponding values (floats with 3 decimal precision)
+
+## Data Generation
+
+The dataset is generated by:
+
+1. Creating random source and target probability distributions over {n_bins} bins
+2. Computing optimal transport mappings using the Python Optimal Transport (POT) library
+3. Converting dense OT matrices to sparse COO format for efficient storage
+4. Splitting the data into train/test sets (80/20 split)
+
+## Applications
+
+This dataset can be used for:
+
+- Training neural networks to predict optimal transport mappings
+- Research in optimal transport theory and applications
+- Developing sparse matrix learning algorithms
+- Benchmarking machine learning models on mathematical optimization tasks
+
+## Citation
+
+If you use this dataset in your research, please cite:
+
+```bibtex
+@dataset{{optimal_transport_dataset_2024,
+  title={{Optimal Transport Dataset for Learning Sparse Transport Mappings}},
+  author={{Your Name}},
+  year={{2024}},
+  url={{https://huggingface.co/datasets/{repo_name}}}
+}}
+```
+
+## License
+
+This dataset is released under the MIT License.
+"""
+    
+    with open(output_path, 'w') as f:
+        f.write(card_content)
+    
+    print(f"✅ Dataset card created: {output_path}")
+
+def main():
+    parser = argparse.ArgumentParser(description="Create Hugging Face dataset for Optimal Transport")
+    parser.add_argument("--n_bins", type=int, default=50, help="Number of bins for discretization")
+    parser.add_argument("--dataset_size", type=int, default=1_000_000, help="Number of samples to generate")
+    parser.add_argument("--output_dir", type=str, default="./ot_dataset", help="Output directory for dataset")
+    parser.add_argument("--device", type=str, default="cpu", help="Device to use (cpu/cuda)")
+    parser.add_argument("--test_split", type=float, default=0.2, help="Test split ratio")
+    parser.add_argument("--random_split", action="store_true", help="Use random split instead of consecutive rows")
+    parser.add_argument("--upload", action="store_true", help="Upload dataset to Hugging Face Hub")
+    parser.add_argument("--repo_name", type=str, help="Repository name for Hugging Face Hub (e.g., 'username/ot-dataset')")
+    parser.add_argument("--token", type=str, help="Hugging Face token (if not provided, will use token from huggingface_hub login)")
+    parser.add_argument("--private", action="store_true", help="Make the repository private")
+    parser.add_argument("--precision", type=int, default=3, help="Precision for sparse matrix string formatting (default: 3)")
+    
+    args = parser.parse_args()
+    
+    # Create output directory
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    print(f"Creating dataset with {args.n_bins} bins and {args.dataset_size} samples")
+    print(f"Output directory: {output_dir}")
+    print(f"Device: {args.device}")
+    
+    # Create dataset using generator
+    print("Creating Hugging Face dataset...")
+    dataset = Dataset.from_generator(
+        lambda: generate_ot_sample_generator(args.n_bins, args.dataset_size, args.device, args.precision)
+    )
+    
+    # Split into train/test
+    print(f"Splitting dataset with {args.test_split} test ratio using consecutive rows...")
+        
+    # Calculate split indices for consecutive rows
+    total_samples = len(dataset)
+    test_size = int(total_samples * args.test_split)
+    train_size = total_samples - test_size
+    
+    # Take first train_size samples for training, last test_size for testing
+    train_indices = list(range(train_size))
+    test_indices = list(range(train_size, total_samples))
+    
+    # Create train and test datasets
+    train_dataset = dataset.select(train_indices)
+    test_dataset = dataset.select(test_indices)
+    
+    # Create dataset dict
+    dataset_dict = DatasetDict({
+        'train': train_dataset,
+        'test': test_dataset
+    })
+
+    # Add metadata
+    metadata = create_dataset_metadata(args.n_bins, args.dataset_size)
+    # Note: DatasetDict doesn't have info attribute, metadata is saved separately
+    
+    # Save dataset
+    print(f"Saving dataset to {output_dir}...")
+    dataset_dict.save_to_disk(str(output_dir))
+    
+    # Save metadata separately
+    import json
+    with open(output_dir / "metadata.json", "w") as f:
+        json.dump(metadata, f, indent=2)
+    
+    print("Dataset saved successfully!")
+    print(f"Train samples: {len(dataset_dict['train'])}")
+    print(f"Test samples: {len(dataset_dict['test'])}")
+    print(f"Total samples: {len(dataset_dict['train']) + len(dataset_dict['test'])}")
+    
+    # Print sample
+    print("\nSample from dataset:")
+    sample = dataset_dict['train'][0]
+    print(f"Source dist shape: {len(sample['source_dist'])}")
+    print(f"Target dist shape: {len(sample['target_dist'])}")
+    print(f"Input idx: {sample['input_idx']}")
+    print(f"Total input shape: {len(sample['total_input'])}")
+    print(f"Output map sparse: {sample['output_map_sparse'][:100]}...")
+
+    # Upload to Hugging Face Hub if requested
+    if args.upload:
+        if not args.repo_name:
+            print("❌ Error: --repo_name is required when using --upload")
+            print("Example: --repo_name 'username/ot-dataset'")
+            return
+        
+        # Create dataset card
+        card_path = output_dir / "README.md"
+        create_dataset_card(args.repo_name, args.n_bins, args.dataset_size, str(card_path))
+        
+        # Upload dataset
+        success = upload_to_huggingface(
+            dataset_dict=dataset_dict,
+            repo_name=args.repo_name,
+            token=args.token,
+            private=args.private
+        )
+
+        if success:
+            print(f"\n🎉 Dataset uploaded successfully!")
+            print(f"🔗 View at: https://huggingface.co/datasets/{args.repo_name}")
+        else:
+            print("\n❌ Upload failed!")
+    else:
+        print(f"\n💡 To upload to Hugging Face Hub, use:")
+        print(f"   python3 create_hf_dataset.py --upload --repo_name 'username/ot-dataset'")
+
+
+if __name__ == "__main__":
+    main()

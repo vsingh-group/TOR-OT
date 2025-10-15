@@ -1,0 +1,61 @@
+# My custom configuration
+# This can be used directly with the training routine
+
+# Override the defaults
+defaults:
+  - data:       default
+  - model:      default
+  - training:   default
+  - tokenizer:  default
+  - logging:    default
+  - _self_
+
+# Override specific parameters
+
+data:
+  #data_dir:    "./experiments/singletarget/data/n_10k/support_10"
+  hf_dataset:     "ivanjaenm/ot-dataset_bins10_size100k_prec3"
+  hf_cache_dir:   "/data/ivan/datasets/hfcache"
+  dataset:
+    size:         100_000
+    support_size: 10
+    feature_dim:  21
+    num_targets:  10
+  loading:
+    num_workers:  20
+
+model:
+  save_path:      "./experiments/trained_models"
+  encoder:
+    support_size: ${data.dataset.support_size}
+    input_dim:    ${data.dataset.feature_dim}   # <-- link to feature_dim
+    output_dim:   128
+    emb_dim:      128
+  decoder:
+    emb_dim:                128
+    seq_dim:                1500
+    units:                  256
+    num_transformer_layers: 4
+    num_attention_heads:    4
+    dropout:                0
+
+training:
+  num_epochs:     100
+  batch_size:     512
+  learning_rate:  1e-4
+  use_amp:  true
+  grad_accumulation: 1
+  world_size: null #null will use all gpus. 0 will use cpu
+  device: cuda #null will use cuda if available, otherwise cpu
+
+tokenizer:
+  num_exponent_digits: 2
+  num_mantissa_digits: 10
+
+inference:
+  out_dir: "./experiments/results"
+  top_k_values: [null, 3, 5]
+  top_p_values: [null, 0.1, 0.5]
+  use_amp: ${training.use_amp}
+  batch_size: 64
+  threshold:  50

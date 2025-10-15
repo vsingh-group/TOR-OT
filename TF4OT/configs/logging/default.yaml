@@ -1,0 +1,58 @@
+# Default logging configuration for Hydra
+# This can be referenced in main config files as: logging=default
+
+# Basic logging configuration
+logging:
+  level: INFO
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+  date_format: '%Y-%m-%d %H:%M:%S'
+  
+  # File logging
+  file:
+    enabled: true
+    filename: "training.log"
+    mode: "w"
+    level: INFO
+    max_bytes: 10485760  # 10MB
+    backup_count: 5
+  
+  # Console output
+  console:
+    enabled: true
+    level: INFO
+    stream: "ext://sys.stdout"
+  
+  # Disable existing loggers
+  disable_existing_loggers: false
+  
+  # Log rotation
+  rotation:
+    enabled: true
+    max_size: "10MB"
+    backup_count: 5
+    when: "midnight"
+    interval: 1
+
+# Hydra job logging configuration
+hydra:
+  job_logging:
+    version: 1
+    formatters:
+      simple:
+        format: '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    handlers:
+      console:
+        class: logging.StreamHandler
+        level: INFO
+        formatter: simple
+        stream: ext://sys.stdout
+      file:
+        class: logging.FileHandler
+        level: INFO
+        formatter: simple
+        filename: ${hydra:runtime.output_dir}/train_regression_singletarget_hydra.log
+        mode: w
+    root:
+      level: INFO
+      handlers: [console, file]
+    disable_existing_loggers: false 

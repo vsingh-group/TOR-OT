@@ -1,0 +1,58 @@
+# Verbose logging configuration for Hydra
+# This can be referenced in main config files as: logging=verbose
+
+# Basic logging configuration - detailed output
+logging:
+  level: DEBUG
+  format: '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+  date_format: '%Y-%m-%d %H:%M:%S'
+  
+  # File logging - detailed debug info
+  file:
+    enabled: true
+    filename: "training_debug.log"
+    mode: "w"
+    level: DEBUG
+    max_bytes: 52428800  # 50MB for verbose logs
+    backup_count: 10
+  
+  # Console output - detailed debug info
+  console:
+    enabled: true
+    level: DEBUG
+    stream: "ext://sys.stdout"
+  
+  # Disable existing loggers
+  disable_existing_loggers: false
+  
+  # Log rotation - more frequent for verbose logs
+  rotation:
+    enabled: true
+    max_size: "50MB"
+    backup_count: 10
+    when: "midnight"
+    interval: 1
+
+# Hydra job logging configuration - detailed
+hydra:
+  job_logging:
+    version: 1
+    formatters:
+      detailed:
+        format: '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+    handlers:
+      console:
+        class: logging.StreamHandler
+        level: DEBUG
+        formatter: detailed
+        stream: ext://sys.stdout
+      file:
+        class: logging.FileHandler
+        level: DEBUG
+        formatter: detailed
+        filename: ${hydra:runtime.output_dir}/train_regression_singletarget_hydra_debug.log
+        mode: w
+    root:
+      level: DEBUG
+      handlers: [console, file]
+    disable_existing_loggers: false 

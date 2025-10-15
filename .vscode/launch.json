@@ -1,0 +1,23 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug TF4OT-Train",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "TF4OT.run_training",
+            "justMyCode": false,
+            "python": "${command:python.interpreterPath}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "CUDA_VISIBLE_DEVICES": "7"
+            },
+            "args": [
+                "--config-name", "small"
+            ]
+        },
+    ]
+}
