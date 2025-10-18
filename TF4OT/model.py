@@ -15,14 +15,14 @@ class TokenRegressor(nn.Module):
     """
     def __init__(self,
                  tokenizer,
-                 encoder_ab,
-                 encoder_C,
-                 emb_dim,
-                 seq_dim: int,
+                 encoder_ab: nn.Module,
+                 encoder_C: nn.Module = None,
+                 emb_dim: int = 128,
+                 seq_dim: int = 1024,
                  num_transformer_layers: int = 1,
                  num_attention_heads:    int = 1,
                  dropout: float = 0.0):
-        
+    
         super().__init__()
 
         self.tokenizer  = tokenizer
@@ -37,7 +37,10 @@ class TokenRegressor(nn.Module):
         self.token_emb = nn.Embedding(self.tokenizer.vocab_size, self.emb_dim, padding_idx=tokenizer.pad_id)
         self.pos_emb   = nn.Embedding(seq_dim, self.emb_dim)
         # projection layer to align concatenated prefix back to embedding dimension
-        self.prefix_proj = nn.Linear(2 * self.emb_dim, self.emb_dim)
+        if encoder_C is not None:
+            self.prefix_proj = nn.Linear(2 * self.emb_dim, self.emb_dim)
+        else:
+            self.prefix_proj = None
 
         # stacked transformer blocks
         self.transformer_layers = nn.ModuleList()

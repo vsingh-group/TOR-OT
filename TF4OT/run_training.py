@@ -16,10 +16,11 @@ import logging
 import json
 import os
 
-# Add distributed training imports
-import torch.distributed as dist
-from torch.nn.parallel import DistributedDataParallel as DDP
+# Add DDP imports
+import torch.multiprocessing as mp
 from torch.utils.data.distributed import DistributedSampler
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
 
 # Add Hydra imports
 import hydra
@@ -31,7 +32,42 @@ logger = logging.getLogger(__name__)
 
 from torch.utils.data._utils.collate import default_collate
 
-def training_routine(cfg):
+def ddp_setup(rank, world_size): 
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "12345" 
+    torch.cuda.set_device(rank)
+    dist.init_process_group( backend="nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    "Cleans up the distributed environment"
+    dist.destroy_process_group()
+
+def prepare_dataset(cfg):
+    dataset      = load_dataset(cfg.data.hf_dataset, cache_dir=cfg.data.hf_cache_dir)
+    train_data   = dataset["train"]
+    train_loader = DataLoader(train_data,
+                            batch_size=cfg.training.batch_size_per_device,
+                            shuffle=False,
+                            #num_workers=cfg.data.loading.num_workers,
+                            pin_memory=True,
+                            drop_last=True,
+                            sampler=DistributedSampler(train_data),
+                            collate_fn=utils.collate_from_string
+    )
+    len_train_data = len(train_data)
+    return train_loader, len_train_data
+
+def ddp_barrier():
+    """Device-aware barrier that avoids the c10d warning, but stays version-safe."""
+    if dist.is_available() and dist.is_initialized():
+        try:
+            # PyTorch >= 2.3 supports device_ids
+            dist.barrier(device_ids=[torch.cuda.current_device()])
+        except TypeError:
+            # Older versions: no device_ids kwarg
+            dist.barrier()    
+
+def training_routine(rank, cfg):
     """
     Train the regression model using Distributed Data Parallel (DDP).
 
@@ -41,6 +77,8 @@ def training_routine(cfg):
         cfg: Hydra configuration object
         model_save_path: Directory where to save the trained model (if None, uses default directory)
     """
+    ddp_setup(rank, cfg.training.world_size)
+
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
                         datefmt="%Y-%m-%d %H:%M:%S",
@@ -79,16 +117,9 @@ def training_routine(cfg):
 
     # Loading training dataset and loader
     logger.info("Loading dataset: " + cfg.data.hf_dataset)
-    dataset      = load_dataset(cfg.data.hf_dataset, cache_dir=cfg.data.hf_cache_dir)
-    train_data   = dataset["train"]
-    train_loader = DataLoader(train_data,
-                            batch_size=cfg.training.batch_size,
-                            shuffle=False,
-                            num_workers=cfg.data.loading.num_workers,
-                            pin_memory=(device.type == "cuda"),
-                            collate_fn=utils.collate_from_string
-    )
-    logger.info(f"train_size={len(train_data)}, training.batch_size={cfg.training.batch_size}, "
+    train_loader, len_train_data = prepare_dataset(cfg)
+
+    logger.info(f"train_size={len_train_data}, training.batch_size={cfg.training.batch_size}, "
                 f"batches_per_epoch={len(train_loader)}")
 
     # Create encoder model
@@ -97,31 +128,34 @@ def training_routine(cfg):
                                nn.GELU(),
                                nn.Linear(cfg.model.encoder.emb_dim, cfg.model.encoder.emb_dim)
                                ).to(device)
-    encoder_C = nn.Sequential(nn.Linear(cfg.data.dataset.input_cost_matrix_dim, cfg.model.encoder.emb_dim),
-                              nn.GELU(),
-                              nn.Linear(cfg.model.encoder.emb_dim, cfg.model.encoder.emb_dim)
-                              ).to(device)
+    # encoder_C = nn.Sequential(nn.Linear(cfg.data.dataset.input_cost_matrix_dim, cfg.model.encoder.emb_dim),
+    #                           nn.GELU(),
+    #                           nn.Linear(cfg.model.encoder.emb_dim, cfg.model.encoder.emb_dim)
+    #                           ).to(device)
 
     # Create Tokenizer
     logger.info("Creating Tokenizer")
-    # TODO: add support for other tokenizers
-    # tokenizer = tokenizers.MyDigitTokenizer(vocabulary=['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' '],
-    #                                         decimal_precision=cfg.tokenizer.decimal_precision)
-    tokenizer = tokenizers.IEEEFloatTokenizer(base=cfg.tokenizer.base,
-                                               num_exponent_digits=cfg.tokenizer.num_exponent_digits,
-                                               num_mantissa_digits=cfg.tokenizer.num_mantissa_digits)
+    tokenizer = tokenizers.MyDigitTokenizer(vocabulary=cfg.tokenizer.DigitTokenizer.vocabulary,
+                                            decimal_precision=cfg.tokenizer.DigitTokenizer.decimal_precision)
+    # tokenizer = tokenizers.IEEEFloatTokenizer(base=cfg.tokenizer.base,
+    #                                            num_exponent_digits=cfg.tokenizer.num_exponent_digits,
+    #                                            num_mantissa_digits=cfg.tokenizer.num_mantissa_digits)
 
     # Create Transformer Model
     logger.info("Creating Transformer Model")
     pytorch_model = model.TokenRegressor(tokenizer,
-                                         encoder_ab,
-                                         encoder_C,
-                                         cfg.model.decoder.emb_dim,
-                                         cfg.model.decoder.seq_dim,
-                                         cfg.model.decoder.num_transformer_layers,
-                                         cfg.model.decoder.num_attention_heads,
-                                         cfg.model.decoder.dropout
+                                         encoder_ab=encoder_ab,
+                                         encoder_C=None,
+                                         emb_dim=cfg.model.decoder.emb_dim,
+                                         seq_dim=cfg.model.decoder.seq_dim,
+                                         num_transformer_layers=cfg.model.decoder.num_transformer_layers,
+                                         num_attention_heads=cfg.model.decoder.num_attention_heads,
+                                         dropout=cfg.model.decoder.dropout
                                          ).to(device)
+    pytorch_model.to(rank)
+    pytorch_model = DDP(pytorch_model, device_ids=[rank])
+    # the core model is now accessible as pytorch_model.module
+
 
     optimizer = optim.Adam(pytorch_model.parameters(), lr=5e-5)
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
@@ -139,6 +173,7 @@ def training_routine(cfg):
     logger.info("Starting training loop")
     pytorch_model.train()
     for epoch in range(cfg.training.num_epochs):
+        train_loader.sampler.set_epoch(epoch)
         pbar = tqdm(train_loader, total=len(train_loader))
         for batch in pbar:
 
@@ -146,9 +181,9 @@ def training_routine(cfg):
             encoder_input_ab = batch[OT_INPUT_TOTAL]
             encoder_input_ab = encoder_input_ab.to(device)
 
-            encoder_input_C  = batch[OT_INPUT_COST_MATRIX]
-            encoder_input_C_flat = encoder_input_C.flatten(start_dim=1)
-            encoder_input_C_flat = encoder_input_C_flat.to(device)
+            # encoder_input_C  = batch[OT_INPUT_COST_MATRIX]
+            # encoder_input_C_flat = encoder_input_C.flatten(start_dim=1)
+            # encoder_input_C_flat = encoder_input_C_flat.to(device)
 
             # tokenizer side (assumes your tokenizer.encode returns torch tensors)
             text_input, pad_mask = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=True)
@@ -157,9 +192,8 @@ def training_routine(cfg):
             text_target, _ = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=False)
 
             #sanity check: convert from_tokens
-            text_target_from_tokens = tokenizer.from_tokens(text_target)
-            text_input_from_tokens  = tokenizer.from_tokens(text_input)
-
+            #text_target_from_tokens = tokenizer.from_tokens(text_target)
+            #text_input_from_tokens  = tokenizer.from_tokens(text_input)
 
             # ignore PAD in targets
             text_target[text_target == tokenizer.pad_id] = -100
@@ -180,62 +214,34 @@ def training_routine(cfg):
 
             pbar.set_description(f"Epoch: {epoch+1}, Batch Loss: {loss.item():.5}")
 
-    # # Wrap model with DDP only if not using CPU
-    # if not use_cpu: decoder = DDP(decoder, device_ids=[rank], output_device=rank, find_unused_parameters=True)
-
-    # if use_cpu:
-    #     # For CPU training, use regular DataLoader
-    #     train_loader = DataLoader(
-    #         train_dataset,
-    #         batch_size=cfg.training.batch_size,
-    #         #shuffle=True,
-    #         num_workers=cfg.data.loading.num_workers,
-    #         pin_memory=False,  # No pin_memory for CPU
-    #     )
-    # else:
-    #     # Use DistributedSampler for proper data distribution across GPUs
-    #     train_sampler = DistributedSampler(
-    #         train_dataset,
-    #         num_replicas=world_size,
-    #         rank=rank,
-    #         #shuffle=True
-    #     )
-
-    #     train_loader = DataLoader(
-    #         train_dataset,
-    #         batch_size=cfg.training.batch_size,
-    #         sampler=train_sampler,
-    #         num_workers=cfg.data.loading.num_workers,
-    #         pin_memory=True
-    #     )
-
-    rank = 0
     # Save the trained model and vocabulary (only on main process)
-    if rank == 0:
+    ddp_barrier()
+    if not dist.is_initialized() or dist.get_rank() == 0:
         model_full_path  = full_save_path + ".pth"
-        config_full_path = full_save_path + ".json"
+        config_yaml_path = full_save_path + ".yaml"   # use YAML (keeps ${hydra:...} intact)
 
         logger.info(f"Saving model to {full_save_path}")
         os.makedirs(os.path.dirname(full_save_path), exist_ok=True)
-        torch.save(pytorch_model.state_dict(), model_full_path)
 
-        # Save the full config automatically using OmegaConf
-        # to_container() converts DictConfig to a standard Python dict
-        config = OmegaConf.to_container(cfg, resolve=True)
-        with open(config_full_path, "w") as f:
-            json.dump(config, f, indent=2)
+        # Save the underlying module’s weights if wrapped in DDP
+        state_dict = (pytorch_model.module.state_dict()
+                    if isinstance(pytorch_model, torch.nn.parallel.DistributedDataParallel)
+                    else pytorch_model.state_dict())
+        torch.save(state_dict, model_full_path)
 
+        # Save the config WITHOUT resolving ${hydra:...} to avoid the crash
+        with open(config_yaml_path, "w") as f:
+            f.write(OmegaConf.to_yaml(cfg, resolve=False))
 
-        # TODO: all params included in decoder + encoder 
-        decoder_total_params = sum(p.numel() for p in pytorch_model.parameters() if p.requires_grad)
-        encoder_total_params = sum(p.numel() for p in encoder_C.parameters() if p.requires_grad) + sum(p.numel() for p in encoder_ab.parameters() if p.requires_grad)
+        # (Optional) report param counts robustly even when encoder_C is None
+        decoder_total_params = sum(p.numel() for p in state_dict.values())
+        encoder_total_params = sum(p.numel() for p in encoder_ab.parameters() if p.requires_grad)
         logger.info(f"Total trainable parameters (encoder + decoder): {decoder_total_params + encoder_total_params}")
         logger.info(f"Total size on disk: {os.path.getsize(model_full_path) / (1024 * 1024):.2f} MB")
         logger.info(f"Training completed and model saved!: {model_full_path}")
+    ddp_barrier()
 
-    # # Cleanup distributed training
-    # cleanup_distributed(use_cpu)
-    # return (decoder.module if not use_cpu else decoder), vocab
+    cleanup()
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig):
@@ -249,6 +255,7 @@ def main(cfg: DictConfig):
     # Override specific parameters
     python3 run_training.py training.num_epochs=50 training.batch_size=8
     """
+    #torch.manual_seed(123)
 
     logger.info("Using GPU training mode")
     logger.info(f"Configuration: {OmegaConf.to_yaml(cfg)}")
@@ -256,9 +263,10 @@ def main(cfg: DictConfig):
     # Set world_size if not specified
     if cfg.training.world_size is None: cfg.training.world_size = torch.cuda.device_count()
 
+    mp.spawn(training_routine, args=(cfg, ), nprocs=cfg.training.world_size)
+
     #TODO: logger.info(f"Starting distributed training with {cfg.training.world_size} GPUs")
     # For GPU training, run directly without multiprocessing
-    training_routine(cfg)
 
 if __name__ == "__main__":
     main()

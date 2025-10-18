@@ -34,15 +34,15 @@ model:
     emb_dim:      128
   decoder:
     emb_dim:                128
-    seq_dim:                3000
+    seq_dim:                500
     units:                  256
     num_transformer_layers: 4
     num_attention_heads:    4
     dropout:                0
 
 training:
-  num_epochs:     1
-  batch_size:     128
+  num_epochs:     8
+  batch_size_per_device:     128
   learning_rate:  1e-4
   use_amp:        true
   grad_accumulation: 1
@@ -50,13 +50,13 @@ training:
   device:           cuda #null will use cuda if available, otherwise cpu
 
 tokenizer:
-# DigitTokenizer
-  #decimal_precision: 8
-  #vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']
-# IEEEFloatTokenizer
-  base: 10
-  num_exponent_digits: 2
-  num_mantissa_digits: 10
+  DigitTokenizer:
+    decimal_precision: 8
+    vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']
+  # IEEEFloatTokenizer:
+  #   base:                10
+  #   num_exponent_digits: 2
+  #   num_mantissa_digits: 10
 
 inference:
   out_dir:      "./experiments/results"

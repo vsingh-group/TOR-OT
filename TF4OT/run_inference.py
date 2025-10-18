@@ -110,7 +110,7 @@ def inference_routine(cfg):
                                                     max_seq_len=cfg.model.decoder.seq_dim)
             text_pred = tokenizer.from_tokens(text_ids_pred)
 
-            for target, pred in zip(utils.to_string_lists(batch[OT_TARGET_PLAN_MATRIX], cfg.tokenizer.decimal_precision), text_pred):
+            for target, pred in zip(utils.to_string_lists(batch[OT_TARGET_PLAN_MATRIX], cfg.tokenizer.DigitTokenizer.decimal_precision), text_pred):
                 print ("target: ", target)
                 print ("pred:   ", pred[:pred.find(']')+1])
                 print ('====================================')
@@ -354,7 +354,7 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
     input_cost_matrix_dim = cfg["data"]["dataset"]["input_cost_matrix_dim"]
 
     # Rebuild tokenizer from config
-    tokenizer_cfg = cfg["tokenizer"]#["IEEEFloatTokenizer"]
+    tokenizer_cfg = cfg["tokenizer"]["DigitTokenizer"]
     
     # TODO: add support for automatic tokenizer selection
     # For now, assume IEEEFloatTokenizer based on config keys
