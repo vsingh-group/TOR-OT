@@ -25,11 +25,11 @@ data:
     num_workers: 20
 
 model:
-  save_path: "./experiments/singletarget/models"
+  save_path:      "./experiments/singletarget/models"
   encoder:
     support_size: ${data.dataset.support_size}
-    input_dim: ${data.dataset.feature_dim}   # <-- link to feature_dim
-    output_dim: 128
+    input_dim:    ${data.dataset.feature_dim}   # <-- link to feature_dim
+    output_dim:   128
   decoder:
     units: 128
     num_transformer_layers: 1
@@ -37,9 +37,9 @@ model:
     dropout: 0
 
 training:
-  num_epochs: 150
-  batch_size: 512
-  learning_rate: 1e-4
+  num_epochs:     150
+  batch_size:     512
+  learning_rate:  1e-4
   use_amp: true
   grad_accumulation: 1
   world_size: null #null will use all gpus. 0 will use cpu
@@ -49,9 +49,9 @@ tokenizer:
   num_mantissa_digits: 6
 
 inference:
-  out_dir: "./experiments/singletarget/results"
+  out_dir:      "./experiments/singletarget/results"
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
-  use_amp: ${training.use_amp}
-  batch_size: 4046
-  threshold: 50
+  use_amp:      ${training.use_amp}
+  batch_size:   4046
+  threshold:    50

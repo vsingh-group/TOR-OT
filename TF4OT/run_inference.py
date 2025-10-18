@@ -1,5 +1,7 @@
 from TF4OT import tokenizers
 from TF4OT import model
+from TF4OT import utils
+
 #from TF4OT.serialization.numeric import tokens
 #from TF4OT.multitarget_models import *
 #from TF4OT.datasets import load_random_uniform_data_1d, load_ot_data_single_target_format
@@ -30,13 +32,7 @@ logger = logging.getLogger(__name__)
 
 def inference_routine(cfg):
     """
-    Train the regression model using Distributed Data Parallel (DDP).
-
-    Args:
-        rank: Rank of the current process
-        world_size: Total number of processes
-        cfg: Hydra configuration object
-        model_save_path: Directory where to save the trained model (if None, uses default directory)
+    Do inference on the saved model.
     """
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -56,7 +52,7 @@ def inference_routine(cfg):
     if name: model_name = f"{name}.pth"
     else:
         model_name = (
-            f"model_n{cfg.data.dataset.size_s}"
+            f"model_n{cfg.data.dataset.size}"
             f"_support{cfg.data.dataset.support_size}"
             f"_ep{cfg.training.num_epochs}"
             f"_dec_units_{cfg.model.decoder.units}"
@@ -78,54 +74,43 @@ def inference_routine(cfg):
 
     # Loading TEST dataset
     logger.info("Loading dataset: " + cfg.data.hf_dataset)
-    dataset = load_dataset(cfg.data.hf_dataset, cache_dir=cfg.data.hf_cache_dir)
-    test_data = dataset["test"]
-    test_loader = DataLoader(test_data, 
+    dataset     = load_dataset(cfg.data.hf_dataset, cache_dir=cfg.data.hf_cache_dir)
+    test_data   = dataset["test"]
+    test_loader = DataLoader(test_data,
                             batch_size=cfg.training.batch_size,
-                            shuffle=True,
+                            shuffle=False,
                             num_workers=cfg.data.loading.num_workers,
-                            pin_memory=True if device.type == "cuda" else False)
+                            pin_memory=(device.type == "cuda"),
+                            collate_fn=utils.collate_from_string
+    )
     logger.info(f"test_size={len(test_data)}, test.batch_size={cfg.training.batch_size}, "
                 f"batches_per_epoch={len(test_loader)}")
 
-    # # Create encoder model
-    # logger.info("Creating Encoder")
-    # encoder = nn.Sequential(nn.Linear(1 + 2 * cfg.data.dataset.support_size, cfg.model.encoder.emb_dim),
-    #                         nn.GELU(),
-    #                         nn.Linear(cfg.model.encoder.emb_dim, cfg.model.encoder.emb_dim)
-    #                         ).to(device)
+    # Create Tokenizer
+    logger.info("Creating Tokenizer")
+    # TODO: add support for other tokenizers
+    OT_INPUT_TOTAL         = "input_total"
+    OT_INPUT_COST_MATRIX   = "input_cost_matrix"
+    OT_TARGET_PLAN_MATRIX  = "target_otplan_solve_sparse"
+    OT_TARGET_PLAN_MATRIX2 = "output_map_sparse"
 
-    # # Create Tokenizer
-    # logger.info("Creating Tokenizer")
-    # # TODO: add support for other tokenizers
-    # tokenizer = tokenizers.MyDigitTokenizer(['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' '])
-
-    # # Create Transformer Model
-    # logger.info("Creating Model")
-    # pytorch_model = model.TokenRegressor(tokenizer,
-    #                                     encoder,
-    #                                     cfg.model.decoder.emb_dim,
-    #                                     cfg.model.decoder.seq_dim,
-    #                                     cfg.model.decoder.num_transformer_layers,
-    #                                     cfg.model.decoder.num_attention_heads,
-    #                                     cfg.model.decoder.dropout
-    #                                     ).to(device)
-    max_seq_len_preds = 100
     pytorch_model.eval()
     with torch.no_grad():
         pbar = tqdm(test_loader, total=len(test_loader))
         for batch in pbar:
 
-            encoder_input = torch.stack(batch['total_input'], dim=1).to(torch.float32)
-            text_input, pad_mask = tokenizer.encode(batch['output_map_sparse'], drop_last=False)
+            encoder_input_ab = batch[OT_INPUT_TOTAL]
+            encoder_input_ab = encoder_input_ab.to(device)
 
-            pad_mask = torch.cat([torch.full((encoder_input.shape[0], 1), True), pad_mask], dim=1)
-            text_ids_pred = pytorch_model.generate(encoder_input.to(device), 
-                                                    temperature=0.1, 
-                                                    max_seq_len=max_seq_len_preds)
-            text_pred = tokenizer.decode(text_ids_pred)
+            text_input, pad_mask = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=False)
 
-            for target, pred in zip(batch['output_map_sparse'], text_pred):
+            pad_mask      = torch.cat([torch.full((encoder_input_ab.shape[0], 1), True), pad_mask], dim=1)
+            text_ids_pred = pytorch_model.generate(encoder_input_ab,
+                                                    temperature=0.1,
+                                                    max_seq_len=cfg.model.decoder.seq_dim)
+            text_pred = tokenizer.from_tokens(text_ids_pred)
+
+            for target, pred in zip(utils.to_string_lists(batch[OT_TARGET_PLAN_MATRIX], cfg.tokenizer.decimal_precision), text_pred):
                 print ("target: ", target)
                 print ("pred:   ", pred[:pred.find(']')+1])
                 print ('====================================')
@@ -353,10 +338,10 @@ def inference_routine(cfg):
 def load_model_by_name(full_save_path: str, device: str = "cuda"):
     """
     Load a TokenRegressor saved in:
-      artifacts/{name}/model_weights.pt
+      artifacts/{name}/model_weights.pth
       artifacts/{name}/config.json
 
-    Returns: (model, tokenizer, config_dict)
+    Returns: (model, tokenizer)
     """
     model_full_path  = full_save_path + ".pth"
     config_full_path = full_save_path + ".json"
@@ -364,35 +349,54 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
     with open(config_full_path) as f:
         cfg = json.load(f)
 
-    # Rebuild tokenizer
-    vocab_config = cfg["vocab_config"]
-    vocabulary = vocab_config["vocabulary"]
-    tokenizer = tokenizers.MyDigitTokenizer(vocabulary)
+    # Extract dimensions from new automatic config structure
+    input_total_dim       = cfg["data"]["dataset"]["input_total_dim"]
+    input_cost_matrix_dim = cfg["data"]["dataset"]["input_cost_matrix_dim"]
+
+    # Rebuild tokenizer from config
+    tokenizer_cfg = cfg["tokenizer"]#["IEEEFloatTokenizer"]
+    
+    # TODO: add support for automatic tokenizer selection
+    # For now, assume IEEEFloatTokenizer based on config keys
+    if "base" in tokenizer_cfg:
+        tokenizer = tokenizers.IEEEFloatTokenizer(
+            base=tokenizer_cfg["base"],
+            num_exponent_digits=tokenizer_cfg["num_exponent_digits"],
+            num_mantissa_digits=tokenizer_cfg["num_mantissa_digits"]
+        )
+    elif "vocabulary" in tokenizer_cfg:
+        tokenizer = tokenizers.MyDigitTokenizer(
+            vocabulary=tokenizer_cfg["vocabulary"],
+            decimal_precision=tokenizer_cfg["decimal_precision"]
+        )
+    else:
+        raise ValueError("Unknown tokenizer configuration")
 
     # Rebuild encoder
-    encoder_config = cfg["model_config"]["encoder_config"]
-    input_dim = encoder_config["input_dim"]
-    output_dim = encoder_config["output_dim"]
-    support_size = encoder_config["support_size"]
-    emb_dim = encoder_config["emb_dim"]
-    encoder = nn.Sequential(nn.Linear(1 + 2 * support_size, emb_dim),
-                            nn.GELU(),
-                            nn.Linear(emb_dim, emb_dim)
-                            ).to(device)
+    emb_dim = cfg["model"]["encoder"]["emb_dim"]
+    encoder_ab = nn.Sequential(
+        nn.Linear(input_total_dim, emb_dim),
+        nn.GELU(),
+        nn.Linear(emb_dim, emb_dim)
+    ).to(device)
+    
+    encoder_C = nn.Sequential(
+        nn.Linear(input_cost_matrix_dim, emb_dim),
+        nn.GELU(),
+        nn.Linear(emb_dim, emb_dim)
+    ).to(device)
 
-    # Rebuild model from saved hyperparameters
-    model_config = cfg["model_config"]
-    emb_dim = model_config["decoder_config"]["emb_dim"]
-    seq_dim = model_config["decoder_config"]["seq_dim"]
-    num_transformer_layers = model_config["decoder_config"]["num_transformer_layers"]
-    num_attention_heads = model_config["decoder_config"]["num_attention_heads"]
+    # Rebuild model using decoder config
+    decoder_cfg = cfg["model"]["decoder"]
     pytorch_model = model.TokenRegressor(
-        tokenizer=tokenizer,
-        encoder=encoder,
-        emb_dim=emb_dim,
-        seq_dim=seq_dim,
-        num_transformer_layers=num_transformer_layers,
-        num_attention_heads=num_attention_heads,
+        tokenizer   = tokenizer,
+        encoder_ab  = encoder_ab,
+        encoder_C   = encoder_C,
+        emb_dim     = decoder_cfg["emb_dim"],
+        seq_dim     = decoder_cfg["seq_dim"],
+        num_transformer_layers = decoder_cfg["num_transformer_layers"],
+        num_attention_heads    = decoder_cfg["num_attention_heads"],
+        dropout     = decoder_cfg.get("dropout", 0.1)  # Use default if not present
     ).to(device)
 
     # Load weights
@@ -405,30 +409,13 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
 def main(cfg: DictConfig):
     """
     Main function using Hydra for configuration management.
-
-    Usage examples:
-    # Use default configuration
-    python train_regression_singletarget_hydra.py
-
-    # Use fast training configuration
-    python train_regression_singletarget_hydra.py training=fast
-
-    # Use fast training and fast model configuration
-    python train_regression_singletarget_hydra.py training=fast decoder=fast encoder=fast
-
-    # Override specific parameters
-    python train_regression_singletarget_hydra.py training.num_epochs=50 training.batch_size=8
-
-    # Use different data directory
-    python train_regression_singletarget_hydra.py data_dir=./path/to/data
     """
 
-    logger.info("Using GPU training mode")
+    logger.info("Using GPU inference mode")
     logger.info(f"Configuration: {OmegaConf.to_yaml(cfg)}")
 
     # Set world_size if not specified
-    if cfg.training.world_size is None:
-        cfg.training.world_size = torch.cuda.device_count()
+    if cfg.training.world_size is None: cfg.training.world_size = torch.cuda.device_count()
 
     #TODO: logger.info(f"Starting distributed training with {cfg.training.world_size} GPUs")
     # For GPU training, run directly without multiprocessing

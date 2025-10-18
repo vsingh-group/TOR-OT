@@ -4,22 +4,21 @@ For full generality, note that the tokens are strings, as we assume the
 vocabulary will assign integer IDs.
 """
 
+from typing import Generic, TypeVar
+from TF4OT import utils
+import numpy as np
+import ordered_set
+import torch
 import abc
 import math
 import re
-from typing import Generic, TypeVar
-import torch
-import numpy as np
-import ordered_set
 
 OrderedSet = ordered_set.OrderedSet
 DELIMITERS = ('<', '>')
 
-
 def _to_token(s: str | int) -> str:
   left_d, right_d = DELIMITERS
   return f'{left_d}{s}{right_d}'
-
 
 def _from_token(token: str) -> str | int:
   left_d, right_d = DELIMITERS
@@ -117,7 +116,7 @@ class DigitTokenizer(DecoderTokenizer[str]):
   
   @property
   def vocab_size(self) -> int:
-    return len(self.all_tokens())    
+    return len(self.all_tokens())
 
   def all_tokens(self) -> OrderedSet[str]:
     # Return serialized tokens (e.g., '<0>', '<PAD>').
@@ -293,14 +292,24 @@ class IEEEFloatTokenizer(DecoderTokenizer[float]):
       base: int = 10,
       num_exponent_digits: int = 1,
       num_mantissa_digits: int = 4,
+      pad_token: str = "<pad>"
   ):
     self.base = base
     self.num_exponent_digits = num_exponent_digits
     self.num_mantissa_digits = num_mantissa_digits
+    self.pad_token = pad_token
+
+    self.itos = [pad_token] + sorted(self.all_tokens())
+    self.stoi = {token: i for i, token in enumerate(self.itos)}
+    self.pad_id    = self.stoi[self.pad_token]
 
   def all_tokens(self) -> OrderedSet[str]:
     tokens = ['+', '-'] + list(range(self.base))
     return OrderedSet([_to_token(s) for s in tokens])
+
+  @property
+  def vocab_size(self) -> int:
+    return len(self.itos)
 
   @property
   def num_tokens_per_obj(self) -> int:
@@ -317,7 +326,37 @@ class IEEEFloatTokenizer(DecoderTokenizer[float]):
       tokens = [_to_token(s) for s in range(self.base)]
     return OrderedSet(tokens)
 
-  def to_tokens(self, f: float, /) -> list[str]:
+  def to_tokens(self, f_list: list[list[float]], pad=True, drop_last=False) -> list[str]:
+    all_lists = []
+    for list in f_list:
+      all_tokens = []
+      for o in list: 
+        all_tokens.extend(self.to_tokens_single_float(o))
+      if drop_last:
+        all_lists.append([self.stoi[t] for t in all_tokens[:-1]])
+      else:
+        all_lists.append([self.stoi[t] for t in all_tokens])
+
+    # --- Padding logic ---
+    mask = None
+    if pad:
+        max_len = max(len(toks) for toks in all_lists)
+
+        padded_lists = []
+        for toks in all_lists:
+            pad_len = max_len - len(toks)
+            padded = toks + [self.pad_id] * pad_len
+            padded_lists.append(torch.LongTensor(padded))
+
+        token_ids = torch.stack(padded_lists)
+        mask = token_ids == self.pad_id
+    else:
+        # no padding → just return ragged lists
+        token_ids = [torch.LongTensor(toks) for toks in all_lists]
+
+    return token_ids, mask
+
+  def to_tokens_single_float(self, f: float, /) -> list[str]:
     sign = '+' if f >= 0 else '-'
     abs_f = abs(f)
     exponent = math.floor(np.log(abs_f) / np.log(self.base)) if abs_f > 0 else 0
@@ -336,7 +375,7 @@ class IEEEFloatTokenizer(DecoderTokenizer[float]):
     e = e.zfill(self.num_exponent_digits)
 
     mantissa = np.base_repr(
-        abs_f * self.base ** (self.num_mantissa_digits - 1 - exponent),
+        int(round(abs_f * self.base ** (self.num_mantissa_digits - 1 - exponent))),
         base=self.base,
     )
 
@@ -366,6 +405,20 @@ class IEEEFloatTokenizer(DecoderTokenizer[float]):
     mantissa = mantissa_unscaled / self.base ** (self.num_mantissa_digits - 1)
 
     return sign * (self.base**exponent) * mantissa
+
+  def from_token_ids(self, token_ids: list[int], /) -> list[float]:
+    """Converts token ids to object."""
+    token_strs = [self.itos[id] for id in token_ids]
+
+    if len(token_strs) % self.num_tokens_per_obj != 0:
+      raise ValueError("Tokens not a multiple of tokens per object.")
+
+    decoded_objs = []
+    for i in range(0, len(token_strs), self.num_tokens_per_obj):
+      chunk = token_strs[i : i + self.num_tokens_per_obj]
+      decoded_objs.append(self.tokenizer.from_tokens(chunk))
+
+    return decoded_objs    
 
 
 class NormalizedTokenizer(DecoderTokenizer[float]):
@@ -531,23 +584,37 @@ class AppendPadTokenizer(DecoderTokenizer[ObjectT]):
       raise ValueError(f'Expected a "{self.pad_token}" token at the end.')
     return self.tokenizer.from_tokens(tokens[:-1])
 
+
 class MyDigitTokenizer:
 
-    def __init__(self, vocabulary):
+    def __init__(self,
+                 vocabulary,
+                 decimal_precision=4):
 
         self.vocabulary = vocabulary
         self.size = len(vocabulary)
-
+        self.decimal_precision = decimal_precision
+        self.pad_id = self.size
         self.vocabulary_mapping = {v: i for i, v in enumerate(vocabulary)}
         self.ids_mapping = {i: v for v, i in self.vocabulary_mapping.items()}
 
-    def encode(self, texts, pad=True, drop_last=False):
+    @property
+    def vocab_size(self) -> int:
+      return len(self.all_tokens()) + 1
+
+    def all_tokens(self) -> OrderedSet[str]:
+      tokens = self.vocabulary
+      return OrderedSet([_to_token(s) for s in tokens])
+
+    def to_tokens(self, float_lists, pad=True, drop_last=False):
+
+        texts = utils.to_string_lists(float_lists, self.decimal_precision)
 
         if (drop_last):
             token_ids = [[self.vocabulary_mapping[c] for c in list(text)[:-1]] for text in texts]
         else:
             token_ids = [[self.vocabulary_mapping[c] for c in list(text)] for text in texts]
-        
+
         mask = None
 
         if (pad):
@@ -561,7 +628,7 @@ class MyDigitTokenizer:
 
         return token_ids, mask
 
-    def decode(self, token_ids):
+    def from_tokens(self, token_ids):
         texts = [''.join([self.ids_mapping.get(t, '') for t in tokens]) for tokens in token_ids]
 
         return texts

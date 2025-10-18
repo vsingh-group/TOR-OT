@@ -8,147 +8,155 @@ probability distributions using sparse matrix representations.
 
 #import numpy as np
 import ot
+import json
 import torch
 import argparse
 import numpy as np
 import scipy.sparse as sp
+from pathlib import Path
 from typing import Dict
 from tqdm.auto import tqdm
 from datasets import Dataset, DatasetDict
 from huggingface_hub import HfApi, create_repo
 
-# # Provide missing aliases for older code
-# if not hasattr(np, "Inf"): np.Inf = np.inf
-# if not hasattr(np, "PINF"): np.PINF = np.inf
-# if not hasattr(np, "NINF"): np.NINF = -np.inf
-# if not hasattr(np, "NaN"): np.NaN = np.nan
-# if not hasattr(np, "NAN"): np.NAN = np.nan
-# if not hasattr(np, "Infinity"): np.Infinity = np.inf
-
-def coo_row_to_string(A, j, precision=3, suppress_small=True):
+def coo_tolist(A: sp.coo_matrix, j: int) -> list:
     """
-    Format row j of a COO sparse matrix as:
-        [i0,j0,v0,i0,j1,v1,...]
-    with i and j as integers, v as float with fixed precision.
+    Extracts the j-th row of a COO sparse matrix as a compact list:
+        [col1, val1, col2, val2, ...]
+    containing only nonzero entries.
 
-    Note: Even if index_mode='normalized' was used elsewhere,
-    this function *outputs ints for i,j* (as requested).
+    Parameters
+    ----------
+    A : sp.coo_matrix
+        Input sparse matrix in COO format.
+    j : int
+        Row index to extract.
+
+    Returns
+    -------
+    list
+        Flat list alternating column indices and values for row j.
     """
+    # Ensure the matrix is in COO format
     if not sp.isspmatrix_coo(A):
         A = A.tocoo(copy=False)
 
-    mask = (A.row == j)
-    if not np.any(mask):
-        return "[]"
+    sparse_rep = []
+    if j is None:
+        for r, c, v in zip(A.row, A.col, A.data):
+            sparse_rep.extend([r, c, v])
+    else:
+        # Select entries from the j-th row
+        mask = (A.row == j)
+        cols = A.col[mask]
+        vals = A.data[mask]
+        # Interleave column indices and values
+        for c, v in zip(cols, vals): 
+            sparse_rep.extend([c, v])
 
-    cols = A.col[mask].astype(int, copy=False)
-    vals = A.data[mask].astype(float, copy=False)
+    return sparse_rep
 
-    # # zero-suppress values (but keep coords)
-    # if suppress_small:
-    #     thresh = 10.0 ** (-precision)
-    #     vals = np.where(np.abs(vals) < thresh, 0.0, vals)
-
-    # zero-suppress values and their corresponding coordinates
-    if suppress_small:
-        thresh = 10.0 ** (-precision)
-        # Create mask for values that should be kept (not suppressed)
-        keep_mask = np.abs(vals) >= thresh
-        # Filter both columns and values to remove suppressed entries
-        cols = cols[keep_mask]
-        vals = vals[keep_mask]        
-
-    # Build string parts: i (int), j (int), v (float)
-    fmt_v = f"{{:.{precision}f}}"
-    parts = []
-    i_int = int(j)
-
-    for jj, vv in zip(cols, vals):
-        parts.append(str(int(jj)))
-        parts.append(fmt_v.format(vv))
-
-    return "[" + ",".join(parts) + "]"
-
-def generate_ot_sample_generator(n_bins: int, dataset_size: int, device: str = 'cpu', precision: int = 3):
+def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', cost_fixed=True, row_wise=True, device: str = 'cpu'):
     """
     Generator function that yields individual samples for the optimal transport dataset.
-    
+
     Args:
         n_bins: Number of bins for discretization
         dataset_size: Number of samples to generate
         device: Device to use for tensor operations
-        precision: Precision for sparse matrix string formatting
 
     Yields:
         Dictionary containing a single sample
     """
-
-    my_dtype_np=np.float64
-    my_dtype_torch=torch.float64
+    my_dtype_np    = np.float64
+    my_dtype_torch = torch.float64
 
     print(f"Generating {dataset_size} samples with {n_bins} bins...")
 
-    # Generate source and target distributions
+    # Generate source distribution
     print("Generating source and target distributions...")
-    source_dist = np.array([np.random.uniform(size=n_bins) for _ in range(dataset_size)])
-    source_dist = source_dist / source_dist.sum(axis=1, keepdims=True)
-    
-    target_dist = np.array([np.random.uniform(size=n_bins) for _ in range(dataset_size)])
-    target_dist = target_dist / target_dist.sum(axis=1, keepdims=True)
+    source_dist = np.random.uniform(size=(dataset_size, n_bins))
+    source_dist /= source_dist.sum(axis=1, keepdims=True)
+    # Generate target distribution
+    target_dist = np.random.uniform(size=(dataset_size, n_bins))
+    target_dist /= target_dist.sum(axis=1, keepdims=True)
 
-    # Generate OT maps
-    print("Computing optimal transport maps...")
-    source_support = np.arange(n_bins, dtype=my_dtype_np)
-    target_support = np.arange(n_bins, dtype=my_dtype_np)
+    # Define support points
+    if cost_fixed:
+        # fixed C case
+        xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
+        xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
+    else:
+        # variable C case
+        xs = np.random.uniform(low=[-1, -1],high=[1, 1], size=(n_bins, 2))
+        xt = np.random.uniform(low=[1, 1],  high=[3, 3], size=(n_bins, 2))
+    # Define cost matrix
+    C = ot.dist(xs, xt, metric=metric)
+    C /= C.max()
 
-    ot_plan_emd_sparse = np.array([
-        ot.emd_1d(source_support, target_support, 
-                  source_dist[i], target_dist[i], dense=False) 
-        for i in tqdm(range(dataset_size))
-    ])
-    ot_plan_emd_dense = np.array([
-        ot.emd_1d(source_support, target_support, 
-                  source_dist[i], target_dist[i], dense=True) 
-        for i in tqdm(range(dataset_size))
-    ])
-    C = ot.dist(source_support, target_support)
-    ot_plan_solve = ot.solve(C, a=source_dist[i], b=target_dist[i]).plan
+    print("Computing optimal transport maps and yielding samples...")
+    for i in tqdm(range(dataset_size), desc="Processing datasets"):
 
+        # Compute OT plans once per dataset
 
-    # Yield individual samples
-    print("Yielding samples...")
-    for i in tqdm(range(dataset_size), desc="Processing samples"):
-        for j in range(n_bins):
-            # Source distribution
-            source_dist_tensor = torch.tensor(source_dist[i], dtype=my_dtype_torch).tolist()
+        # Sparse plan
+        otplan_emd_sparse = ot.emd_1d(
+            xs, xt,
+            source_dist[i], target_dist[i], dense=False
+        )
+        otplan_solve_sparse = ot.solve(
+            C, a=source_dist[i], b=target_dist[i]
+        ).sparse_plan
 
-            # Target distribution
-            target_dist_tensor = torch.tensor(target_dist[i], dtype=my_dtype_torch).tolist()
+        # Dense plan
+        otplan_emd_dense = ot.emd_1d(
+            xs, xt,
+            source_dist[i], target_dist[i], dense=True
+        )
+        otplan_solve_dense = ot.solve(
+            C, a=source_dist[i], b=target_dist[i]
+        ).plan
 
-            # Input index (normalized row position)
-            input_idx = [j / n_bins]
+        # Convert source/target distributions to tensors
+        source_tensor = torch.tensor(source_dist[i], dtype=my_dtype_torch)
+        target_tensor = torch.tensor(target_dist[i], dtype=my_dtype_torch)
 
-            # Combined input (source + target + row_id)
-            total_input = torch.hstack((
-                torch.tensor(source_dist[i], dtype=my_dtype_torch),
-                torch.tensor(target_dist[i], dtype=my_dtype_torch),
-                torch.tensor([j / n_bins],   dtype=my_dtype_torch)
-            )).to(my_dtype_torch)
+        # Yield individual bin samples
+        if row_wise:
+            for j in range(n_bins):
+                input_idx = [j / n_bins]
 
-            total_input = total_input.to(device=device)
+                input_total = torch.hstack((
+                    source_tensor,
+                    target_tensor,
+                    torch.tensor([j / n_bins], dtype=my_dtype_torch)
+                )).to(my_dtype_torch).to(device)
 
-            total_input_list = total_input.tolist()
-
-            # Sparse OT map row
-            output_map_sparse = coo_row_to_string(ot_plan_emd_sparse[i], j, precision=precision)
-
-            # Yield the sample
+                yield {
+                    'source_dist':  source_tensor.tolist(),
+                    'target_dist':  target_tensor.tolist(),
+                    'input_cost_matrix':  C.tolist(),
+                    'input_idx':    input_idx,
+                    'input_total':  input_total.tolist(),
+                    'target_otplan_emd_sparse':   coo_tolist(otplan_emd_sparse, j),
+                    'target_otplan_emd_dense':    otplan_emd_dense[j].tolist(),
+                    'target_otplan_solve_dense':  otplan_solve_dense[j].tolist(),
+                    'target_otplan_solve_sparse': coo_tolist(otplan_solve_sparse, j)
+                }
+        else:
+            input_total = torch.hstack((
+                source_tensor,
+                target_tensor
+                )).to(my_dtype_torch).to(device)
             yield {
-                'source_dist': source_dist_tensor,
-                'target_dist': target_dist_tensor,
-                'input_idx': input_idx,
-                'total_input': total_input_list,
-                'output_map_sparse': output_map_sparse
+                'source_dist':  source_tensor.tolist(),
+                'target_dist':  target_tensor.tolist(),
+                'input_cost_matrix':  C.tolist(),
+                'input_total':  input_total.tolist(),
+                'target_otplan_emd_sparse':   coo_tolist(otplan_emd_sparse, None),
+                'target_otplan_emd_dense':    otplan_emd_dense.tolist(),
+                'target_otplan_solve_dense':  otplan_solve_dense.tolist(),
+                'target_otplan_solve_sparse': coo_tolist(otplan_solve_sparse, None)
             }
 
 def create_dataset_metadata(n_bins: int, dataset_size: int) -> Dict:
@@ -323,9 +331,12 @@ This dataset is released under the MIT License.
 
 def main():
     parser = argparse.ArgumentParser(description="Create Hugging Face dataset for Optimal Transport")
-    parser.add_argument("--n_bins", type=int, default=50, help="Number of bins for discretization")
+    parser.add_argument("--n_bins", type=int, default=10, help="Number of bins for discretization")
     parser.add_argument("--dataset_size", type=int, default=1_000_000, help="Number of samples to generate")
+    parser.add_argument("--row_wise", action="store_true", help="Store output plan matrix row by row?")
     parser.add_argument("--output_dir", type=str, default="./ot_dataset", help="Output directory for dataset")
+    parser.add_argument("--metric", type=str, default="sqeuclidean", help="Distance metric")
+    parser.add_argument("--cost_fixed", type=bool, default=True, help="Is the cost matrix C, fixed?")
     parser.add_argument("--device", type=str, default="cpu", help="Device to use (cpu/cuda)")
     parser.add_argument("--test_split", type=float, default=0.2, help="Test split ratio")
     parser.add_argument("--random_split", action="store_true", help="Use random split instead of consecutive rows")
@@ -334,39 +345,40 @@ def main():
     parser.add_argument("--token", type=str, help="Hugging Face token (if not provided, will use token from huggingface_hub login)")
     parser.add_argument("--private", action="store_true", help="Make the repository private")
     parser.add_argument("--precision", type=int, default=3, help="Precision for sparse matrix string formatting (default: 3)")
-    
+
     args = parser.parse_args()
-    
+
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     print(f"Creating dataset with {args.n_bins} bins and {args.dataset_size} samples")
     print(f"Output directory: {output_dir}")
     print(f"Device: {args.device}")
+    print(f"Precision: {args.precision}")
     
     # Create dataset using generator
     print("Creating Hugging Face dataset...")
     dataset = Dataset.from_generator(
-        lambda: generate_ot_sample_generator(args.n_bins, args.dataset_size, args.device, args.precision)
+        lambda: ot_sample_generator(args.n_bins, args.dataset_size, args.metric, args.cost_fixed, args.row_wise, args.device)
     )
-    
+
     # Split into train/test
     print(f"Splitting dataset with {args.test_split} test ratio using consecutive rows...")
-        
+
     # Calculate split indices for consecutive rows
     total_samples = len(dataset)
     test_size = int(total_samples * args.test_split)
     train_size = total_samples - test_size
-    
+
     # Take first train_size samples for training, last test_size for testing
     train_indices = list(range(train_size))
-    test_indices = list(range(train_size, total_samples))
-    
+    test_indices  = list(range(train_size, total_samples))
+
     # Create train and test datasets
     train_dataset = dataset.select(train_indices)
     test_dataset = dataset.select(test_indices)
-    
+
     # Create dataset dict
     dataset_dict = DatasetDict({
         'train': train_dataset,
@@ -376,29 +388,29 @@ def main():
     # Add metadata
     metadata = create_dataset_metadata(args.n_bins, args.dataset_size)
     # Note: DatasetDict doesn't have info attribute, metadata is saved separately
-    
+
     # Save dataset
     print(f"Saving dataset to {output_dir}...")
     dataset_dict.save_to_disk(str(output_dir))
-    
+
     # Save metadata separately
-    import json
     with open(output_dir / "metadata.json", "w") as f:
         json.dump(metadata, f, indent=2)
-    
+
     print("Dataset saved successfully!")
     print(f"Train samples: {len(dataset_dict['train'])}")
     print(f"Test samples: {len(dataset_dict['test'])}")
     print(f"Total samples: {len(dataset_dict['train']) + len(dataset_dict['test'])}")
-    
+
     # Print sample
     print("\nSample from dataset:")
     sample = dataset_dict['train'][0]
     print(f"Source dist shape: {len(sample['source_dist'])}")
     print(f"Target dist shape: {len(sample['target_dist'])}")
-    print(f"Input idx: {sample['input_idx']}")
-    print(f"Total input shape: {len(sample['total_input'])}")
-    print(f"Output map sparse: {sample['output_map_sparse'][:100]}...")
+    if args.row_wise:
+        print(f"Input idx: {sample['input_idx']}")
+    print(f"Input total shape: {len(sample['input_total'])}")
+    #print(f"Output map sparse: {sample['output_map_sparse'][:100]}...")
 
     # Upload to Hugging Face Hub if requested
     if args.upload:
@@ -406,11 +418,11 @@ def main():
             print("❌ Error: --repo_name is required when using --upload")
             print("Example: --repo_name 'username/ot-dataset'")
             return
-        
+
         # Create dataset card
         card_path = output_dir / "README.md"
         create_dataset_card(args.repo_name, args.n_bins, args.dataset_size, str(card_path))
-        
+
         # Upload dataset
         success = upload_to_huggingface(
             dataset_dict=dataset_dict,
@@ -427,7 +439,6 @@ def main():
     else:
         print(f"\n💡 To upload to Hugging Face Hub, use:")
         print(f"   python3 create_hf_dataset.py --upload --repo_name 'username/ot-dataset'")
-
 
 if __name__ == "__main__":
     main()

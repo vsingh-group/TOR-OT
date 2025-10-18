@@ -16,7 +16,42 @@
                 "CUDA_VISIBLE_DEVICES": "7"
             },
             "args": [
-                "--config-name", "small"
+                "--config-name", "test_row_wise"
+                //"--config-name", "test"
+            ]
+        },
+        {
+            "name": "Debug TF4OT-Inference",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "TF4OT.run_inference",
+            "justMyCode": false,
+            "python": "${command:python.interpreterPath}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "CUDA_VISIBLE_DEVICES": "7"
+            },
+            "args": [
+                "--config-name", "test_row_wise"
+                //"--config-name", "test"
+            ]
+        },        
+        {
+            "name": "Debug TF4OT-Data",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "TF4OT.run_datagenerator",
+            "justMyCode": false,
+            "python": "${command:python.interpreterPath}",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "CUDA_VISIBLE_DEVICES": "7"
+            },
+            "args": [
+                "--n_bins", "10", 
+                "--dataset_size", "100_000", 
+                "--output_dir", "./ot_dataset",
+                "--repo_name", "ivanjaenm/ot_dataset_test"
             ]
         },
     ]
