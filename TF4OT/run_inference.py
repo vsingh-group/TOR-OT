@@ -1,26 +1,25 @@
 from TF4OT import tokenizers
 from TF4OT import model
 from TF4OT import utils
-
-#from TF4OT.serialization.numeric import tokens
-#from TF4OT.multitarget_models import *
-#from TF4OT.datasets import load_random_uniform_data_1d, load_ot_data_single_target_format
-#rom TF4OT.utils.multitarget_datasets_hf import *
+from TF4OT.utils import my_dtype_np, my_dtype_torch
 from datasets import load_dataset
 import torch
 import functools
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
+from sklearn.metrics import mean_squared_error
+from scipy import sparse
 from tqdm import tqdm
+import numpy as np
 import logging
-import json
+import yaml
 import os
-
-# Add distributed training imports
-import torch.distributed as dist
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel as DDP
+import nbformat
+from nbformat.v4 import new_notebook, new_markdown_cell, new_code_cell
+from tabulate import tabulate
+import base64
+from io import BytesIO
 
 # Add Hydra imports
 import hydra
@@ -29,6 +28,7 @@ from hydra.utils import instantiate
 
 # Setup logging
 logger = logging.getLogger(__name__)
+
 
 def inference_routine(cfg):
     """
@@ -115,239 +115,32 @@ def inference_routine(cfg):
                 print ("pred:   ", pred[:pred.find(']')+1])
                 print ('====================================')
             break
-    # Create a vocabulary for the model
-    # Use a unnormalized vocabulary for regression.
-    # specify number of digits for mantissa and exponent
-    # Build a serializer with custom defaults:
-    # if rank == 0: logger.info("Creating vocabulary")
-    # my_serializer = tokens.IEEEFloatTokenSerializer(
-    #     num_exponent_digits=cfg.tokenizer.num_exponent_digits,
-    #     num_mantissa_digits=cfg.tokenizer.num_mantissa_digits
-    # )
-    # vocab = vocabs.UnnormalizedVocab(serializer=my_serializer)
-    # if rank == 0:
-    #     logger.info(f"vocab.size (V): {vocab.size}")
-    #     logger.info(f"vocab.token_length (K): {vocab.token_length}") # K = 2 + num_exponent + num_mantissa
 
-    # # Create decoder model
-    # if rank == 0: logger.info("Creating decoder model")
-    # decoder = AttentionDecoderMultitarget(
-    #     encoder=encoder,
-    #     vocab=vocab,
-    #     units=cfg.model.decoder.units,
-    #     num_transformer_layers=cfg.model.decoder.num_transformer_layers,
-    #     num_attention_heads=cfg.model.decoder.num_attention_heads,
-    #     num_targets=cfg.data.dataset.num_targets,
-    #     dropout=cfg.model.decoder.dropout,
-    # ).to(device)
-
-    # # Initialize model parameters with a dummy forward pass
-    # # This is required for DDP to work properly
-    # with torch.no_grad():
-    #     B = 2
-    #     K = cfg.data.dataset.num_targets  # number of targets for multitarget decoder
-    #     supp = cfg.model.encoder.support_size
-    #     # Encoder-side dummy inputs (match training shapes & dtypes)
-    #     dummy_u  = torch.rand(B, supp, device=device, dtype=torch.float32)  # [B, support_size]
-    #     dummy_v  = torch.rand(B, supp, device=device, dtype=torch.float32)  # [B, support_size]
-    #     dummy_ux = torch.arange(1, supp + 1, device=device, dtype=torch.long).unsqueeze(0).expand(B, -1)  # [B, support_size] (each row: 1 to support_size)
-    #     # token_length is how many tokens represent one float; model uses it for pos emb.
-    #     L_tok = getattr(vocab, "token_length", vocab.token_length)  # safe fallback if not set
-    #     dummy_dec_in = torch.randint(
-    #         low=0, high=vocab.size, size=(B, K, L_tok - 1), device=device, dtype=torch.long
-    #     )  # [B, K, L-1] for multitarget decoder
-    #     # Run a dummy forward to materialize LazyLinear etc.
-    #     _ = decoder((dummy_u, dummy_v, dummy_ux), dummy_dec_in)  # logits [B, K, L, V]
-
-    # # Wrap model with DDP only if not using CPU
-    # if not use_cpu: decoder = DDP(decoder, device_ids=[rank], output_device=rank, find_unused_parameters=True)
-
-    # # Load test data
-    # if rank == 0: logger.info(f"Loading data from: {cfg.data.data_hf}")
-
-    # # loading dataset - huggingface
-    # train_dataset = load_dataset(cfg.data.data_hf, split="train")
-    # dataset_size  = len(train_dataset)
-    # X_cols = ["u_source", "v_target", "u_source_support"]  # features
-    # Y_col  = "T_pi"                                        # target (barycentric projection)
-
-    # if rank == 0: logger.info(f"Loaded {dataset_size} training samples")
-
-    # # Convert Y to token IDs -- faster
-    # def encode_batch(batch):
-    #     # batch[Y_col]: list of rows, each row is list[float]
-    #     return {
-    #         "Y_token_ids": [[vocab.to_int(y) for y in row] for row in batch[Y_col]]
-    #     }
-
-    # train_dataset = train_dataset.map(
-    #     encode_batch,
-    #     batched=True,
-    #     batch_size=cfg.training.batch_size,
-    #     num_proc=1,          # parallelize
-    #     desc="Tokenizing Y"
-    # )
-
-    # # # --- Build tuple-like fields: X, Y_in, Y_out ---
-    # # def build_fields(example):
-    # #     # Convert feature blocks to arrays (float32) and concat along the last axis
-    # #     # Assumes each X_cols entry is array-like with matching leading dims
-    # #     x_parts = [np.asarray(example[c], dtype=np.float32) for c in X_cols]
-    # #     # If these are 2D/3D blocks, concat along the last axis; adapt axis if needed
-    # #     X = np.concatenate(x_parts, axis=-1)
-
-    # #     # Y: convert to int64 tensor-friendly array
-    # #     Y = np.asarray(example["Y_token_ids"], dtype=np.int64)
-    # #     # Teacher-forcing style split: shift last axis by 1
-    # #     Y_in  = Y[..., :-1]
-    # #     Y_out = Y  # full target
-
-    # #     return {
-    # #         "X": X,
-    # #         "Y_in": Y_in,
-    # #         "Y_out": Y_out,
-    # #     }
-    # # train_dataset = train_dataset.map(build_fields, desc="Building X, Y_in, Y_out")
-
-    # # Keep only the three fields we need
-    # keep_cols = ["u_source", "v_target", "u_source_support", "T_pi", "pi", "Y_token_ids"]
-    # drop_cols = [c for c in train_dataset.column_names if c not in keep_cols]
-    # if drop_cols: train_dataset = train_dataset.remove_columns(drop_cols)
-    # # Format as PyTorch so __getitem__ returns tensors
-    # train_dataset.set_format(type="torch", columns=keep_cols)
-
-    # # Create dataset and dataloader
-    # #train_dataset = TensorDataset(X_train_t, Y_train_token_ids_t[:, :, :-1], Y_train_token_ids_t)
-
-    # if use_cpu:
-    #     # For CPU training, use regular DataLoader
-    #     train_loader = DataLoader(
-    #         train_dataset,
-    #         batch_size=cfg.training.batch_size,
-    #         #shuffle=True,
-    #         num_workers=cfg.data.loading.num_workers,
-    #         pin_memory=False,  # No pin_memory for CPU
-    #     )
-    # else:
-    #     # Use DistributedSampler for proper data distribution across GPUs
-    #     train_sampler = DistributedSampler(
-    #         train_dataset,
-    #         num_replicas=world_size,
-    #         rank=rank,
-    #         #shuffle=True
-    #     )
-
-    #     train_loader = DataLoader(
-    #         train_dataset,
-    #         batch_size=cfg.training.batch_size,
-    #         sampler=train_sampler,
-    #         num_workers=cfg.data.loading.num_workers,
-    #         pin_memory=True
-    #     )
-
-    # # Setup optimizer and loss function
-    # optimizer = optim.Adam(decoder.parameters(), lr=cfg.training.learning_rate)
-    # criterion = nn.CrossEntropyLoss(reduction='sum')
-    # scaler    = torch.amp.GradScaler() if cfg.training.use_amp else None
-
-    # # Training loop
-    # if rank == 0:
-    #     logger.info("Starting training loop")
-    #     logger.info(f"Training for {cfg.training.num_epochs} epochs with batch size {cfg.training.batch_size}")
-    #     logger.info(f"Learning rate: {cfg.training.learning_rate}")
-    #     logger.info(f"Using AMP: {cfg.training.use_amp}")
-    #     logger.info(f"Gradient accumulation: {cfg.training.grad_accumulation}")
-
-    # decoder.train()
-
-    # # Create epoch progress bar (only on main process)
-    # if rank == 0:
-    #     epoch_pbar = tqdm(range(cfg.training.num_epochs), desc="Training", unit="epoch")
-    # else:
-    #     epoch_pbar = range(cfg.training.num_epochs)
-
-    # for epoch in epoch_pbar:
-    #     # Set epoch for sampler to ensure different shuffling each epoch (only for distributed training)
-    #     if not use_cpu: train_sampler.set_epoch(epoch)
-
-    #     total_loss = 0.0
-    #     optimizer.zero_grad()
-
-    #     # Create batch progress bar (only on main process)
-    #     #TODO: fix for multi-gpu training
-    #     if rank == 0:
-    #         batch_pbar = train_loader
-    #     else:
-    #         batch_pbar = train_loader
-
-    #     for step, batch in enumerate(batch_pbar):
-    #         batch_X_u             = batch['u_source']           # x_1
-    #         batch_X_v             = batch['v_target']           # x_2
-    #         batch_X_ux            = batch['u_source_support']   # x_3
-    #         batch_Y_map           = batch['T_pi']               # y
-    #         batch_Y_map_token_ids = batch['Y_token_ids']        # y_target: [B, K, L]
-    #         batch_Y_plan          = batch['pi']
-
-    #         batch_X_u             = batch_X_u.to(device, non_blocking=True)
-    #         batch_X_v             = batch_X_v.to(device, non_blocking=True)
-    #         batch_X_ux            = batch_X_ux.to(device, dtype=torch.long, non_blocking=True)
-    #         batch_Y_map           = batch_Y_map.to(device, non_blocking=True)
-    #         batch_Y_map_token_ids = batch_Y_map_token_ids.to(device, non_blocking=True)
-    #         batch_Y_plan          = batch_Y_plan.to(device, non_blocking=True)
-
-    #         # Forward pass
-    #         #TODO: Enable quantization with cfg.training.use_amp:
-    #         batch_logits = decoder((batch_X_u, batch_X_v, batch_X_ux), batch_Y_map_token_ids[:,:,:-1])  # [B, K, L, V]
-    #         #TODO: adding .contiguous() might be faster
-    #         logits_ch_first = batch_logits.permute(0, 3, 1, 2)                                          # [B, V, K, L]
-    #         loss = criterion(logits_ch_first, batch_Y_map_token_ids)                                    # averages over B,K,L
-
-    #         # Backward pass with gradient accumulation and AMP support
-    #         if cfg.training.use_amp:
-    #             scaler.scale(loss / cfg.training.grad_accumulation).backward()
-    #         else:
-    #             (loss / cfg.training.grad_accumulation).backward()
-
-    #         if (step + 1) % cfg.training.grad_accumulation == 0 or (step + 1) == len(train_loader):
-    #             if cfg.training.use_amp:
-    #                 scaler.step(optimizer)
-    #                 scaler.update()
-    #             else:
-    #                 optimizer.step()
-    #             optimizer.zero_grad()
-
-    #         total_loss += loss.item()
-
-    #     # Synchronize loss across all processes (only for distributed training)
-    #     if use_cpu:
-    #         avg_loss = total_loss / len(train_loader)
-    #     else:
-    #         total_loss_tensor = torch.tensor(total_loss, device=device)
-    #         dist.all_reduce(total_loss_tensor)
-    #         avg_loss = total_loss_tensor.item() / world_size / len(train_loader)
-
-    #     # Update epoch progress bar with final loss
-    #     if rank == 0:
-    #         epoch_pbar.set_postfix({'loss': f'{avg_loss:.4e}'})
-    #         logger.info(f"Epoch {epoch+1}/{cfg.training.num_epochs} - Loss: {avg_loss:.4e}")
-
-    # # Cleanup distributed training
-    # cleanup_distributed(use_cpu)
-    # return (decoder.module if not use_cpu else decoder), vocab
+    # Run distribution pair tests if enabled
+    if hasattr(cfg.inference, 'test_distributions') and cfg.inference.test_distributions:
+        logger.info(f"\n{'='*80}")
+        logger.info("Starting distribution pair tests...")
+        logger.info(f"{'='*80}\n")
+        test_1d_distribution_examples(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_name=model_name)
 
 def load_model_by_name(full_save_path: str, device: str = "cuda"):
     """
     Load a TokenRegressor saved in:
       artifacts/{name}/model_weights.pth
-      artifacts/{name}/config.json
+      artifacts/{name}/config.json or config.yaml
 
     Returns: (model, tokenizer)
     """
     model_full_path  = full_save_path + ".pth"
-    config_full_path = full_save_path + ".json"
-
-    with open(config_full_path) as f:
-        cfg = json.load(f)
+    
+    # Check for both .yaml and .json config files
+    yaml_config_path = full_save_path + ".yaml"
+    
+    if os.path.exists(yaml_config_path):
+        with open(yaml_config_path) as f:
+            cfg = yaml.safe_load(f)
+    else:
+        raise FileNotFoundError(f"No config file found at {yaml_config_path}")
 
     # Extract dimensions from new automatic config structure
     input_total_dim       = cfg["data"]["dataset"]["input_total_dim"]
@@ -355,7 +148,7 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
 
     # Rebuild tokenizer from config
     tokenizer_cfg = cfg["tokenizer"]["DigitTokenizer"]
-    
+
     # TODO: add support for automatic tokenizer selection
     # For now, assume IEEEFloatTokenizer based on config keys
     if "base" in tokenizer_cfg:
@@ -379,19 +172,20 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
         nn.GELU(),
         nn.Linear(emb_dim, emb_dim)
     ).to(device)
-    
-    encoder_C = nn.Sequential(
-        nn.Linear(input_cost_matrix_dim, emb_dim),
-        nn.GELU(),
-        nn.Linear(emb_dim, emb_dim)
-    ).to(device)
+
+    # Note: encoder_C is commented out in training, so we don't create it during loading
+    # encoder_C = nn.Sequential(
+    #     nn.Linear(input_cost_matrix_dim, emb_dim),
+    #     nn.GELU(),
+    #     nn.Linear(emb_dim, emb_dim)
+    # ).to(device)
 
     # Rebuild model using decoder config
     decoder_cfg = cfg["model"]["decoder"]
     pytorch_model = model.TokenRegressor(
         tokenizer   = tokenizer,
         encoder_ab  = encoder_ab,
-        encoder_C   = encoder_C,
+        encoder_C   = None,  # Match training setup: encoder_C was None
         emb_dim     = decoder_cfg["emb_dim"],
         seq_dim     = decoder_cfg["seq_dim"],
         num_transformer_layers = decoder_cfg["num_transformer_layers"],
@@ -405,6 +199,604 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
 
     return pytorch_model, tokenizer
 
+def hist_from_samples(X_sampler, Y_sampler, bins=80, density=False, trim_percentiles=(0.5, 99.5)):
+    """
+    Returns:
+        counts_X: (bins,) histogram for X
+        counts_Y: (bins,) histogram for Y
+        bin_edges: (bins+1,) shared edges
+    """
+    sample_size = 100_000
+    # Sample
+    X = X_sampler.sample(sample_size)
+    Y = Y_sampler.sample(sample_size)
+
+    # To flat numpy
+    def to_1d_np(t):
+        if isinstance(t, torch.Tensor):
+            t = t.detach().cpu().numpy()
+        return np.asarray(t).reshape(-1)
+
+    X_np = to_1d_np(X)
+    Y_np = to_1d_np(Y)
+
+    # Shared bin edges (optionally trimmed for stability)
+    if trim_percentiles is not None:
+        p_lo, p_hi = trim_percentiles
+        lo = np.percentile(np.concatenate([X_np, Y_np]), p_lo)
+        hi = np.percentile(np.concatenate([X_np, Y_np]), p_hi)
+        rng = (lo, hi)
+    else:
+        lo = np.min([X_np.min(), Y_np.min()])
+        hi = np.max([X_np.max(), Y_np.max()])
+        rng = (lo, hi)
+
+    bin_edges = np.linspace(rng[0], rng[1], bins + 1)
+
+    # Histograms with shared edges
+    counts_X, _ = np.histogram(X_np, bins=bin_edges, density=density)
+    probsX = counts_X / counts_X.sum()     # sums to 1 exactly (ignores out-of-range)
+    counts_Y, _ = np.histogram(Y_np, bins=bin_edges, density=density)
+    probsY = counts_Y / counts_Y.sum()     # sums to 1 exactly (ignores out-of-range)
+    return probsX, probsY, bin_edges    
+
+def sparse_row_string_to_dense_string(
+    s: str,
+    n_bins: int,
+    mode: str = "auto",           # 'auto' | 'index' | 'normalized'
+    precision: int = 3,
+    separator: str = ",",
+    floatmode: str = "fixed",
+    suppress_small: bool = True,
+) -> str:
+    """
+    Convert a sparse row string to a dense row string "[..., ...]".
+
+    Supported sparse formats:
+      - 'index'      : [i0,j0,v0,i1,j1,v1,...]
+      - 'normalized' : [x0,y0,v0,x1,y1,v1,...] with x=i/denom, y=j/denom,
+                       where denom is auto-chosen as n_bins or n_bins-1.
+
+    Duplicates for the same column are summed. Output has no spaces.
+    """
+    s = s.strip()
+    #print("s: ", s)
+    if s == "[]":
+        #print("String is empty, returning zeros")
+        dense = np.zeros(n_bins, dtype=float)
+        return np.array2string(
+            dense, precision=precision, separator=separator,
+            floatmode=floatmode, suppress_small=suppress_small,
+            max_line_width=1_000_000
+        )
+
+    if not s.startswith('['):
+        # String doesn't start with '[', try to recover by adding the missing bracket
+        #print(f"String doesn't start with '[', attempting recovery: {s}")
+        
+        # Try different recovery strategies
+        recovery_attempts = []
+        
+        # Strategy 1: Add missing opening bracket if string ends with ']'
+        if s.endswith(']'):
+            recovery_attempts.append('[' + s)
+        
+        # Strategy 2: If string looks like it has numbers and commas, wrap it in brackets
+        if any(c.isdigit() for c in s) and ',' in s:
+            recovery_attempts.append('[' + s + ']' if not s.endswith(']') else '[' + s)
+        
+        # Strategy 3: If string is just a closing bracket or empty, treat as empty array
+        if s.strip() in ['', ']']:
+            recovery_attempts.append('[]')
+
+        # Try each recovery attempt
+        for attempt in recovery_attempts:
+            try:
+                # Test if this recovery attempt would work by trying to parse it
+                test_inner = attempt[1:-1] if attempt.startswith('[') and attempt.endswith(']') else ""
+                if test_inner:
+                    test_vals = np.fromstring(test_inner, sep=',', dtype=float)
+                    test_vals = test_vals[np.isfinite(test_vals)]
+                    if test_vals.size > 0 and test_vals.size % 2 == 0:
+                        #print(f"Recovery successful with attempt: {attempt}")
+                        s = attempt
+                        break
+            except:
+                continue
+        else:
+            # If all recovery attempts failed, return zeros
+            #print("All recovery attempts failed, returning zeros")
+            dense = np.zeros(n_bins, dtype=float)
+            return np.array2string(
+                dense, precision=precision, separator=separator,
+                floatmode=floatmode, suppress_small=suppress_small,
+                max_line_width=1_000_000
+            )
+
+    if not s.endswith(']'):
+        # String starts with '[' but doesn't end with ']', try to recover parts
+        # Find the last ']' or use the whole string if no ']' found
+        #print("String doesn't end with ']', trying to recover parts")
+        last_bracket = s.rfind(']')
+        if last_bracket != -1:
+            s = s[:last_bracket + 1]
+        # If no ']' found, we'll try to parse what we have
+
+    inner = s[1:-1]  # comma-separated, no spaces required
+    #print("inner: ", inner)
+    # Parse with robust error handling
+    try:
+        vals = np.fromstring(inner, sep=',', dtype=float)
+        # Remove any NaN or infinite values that might have corrupted parsing
+        vals = vals[np.isfinite(vals)]
+    except:
+        # If parsing fails completely, return zeros
+        dense = np.zeros(n_bins, dtype=float)
+        return np.array2string(
+            dense, precision=precision, separator=separator,
+            floatmode=floatmode, suppress_small=suppress_small,
+            max_line_width=1_000_000
+        )
+
+    if vals.size == 0:
+        # Empty after cleaning
+        dense = np.zeros(n_bins, dtype=float)
+        return np.array2string(
+            dense, precision=precision, separator=separator,
+            floatmode=floatmode, suppress_small=suppress_small,
+            max_line_width=1_000_000
+        )
+
+    # Handle odd number of values gracefully instead of raising an error
+    if vals.size % 2 != 0:
+        # If odd, remove the last value to make it even (conservative approach)
+        if vals.size > 1:
+            vals = vals[:-1]
+        else:
+            # If only one value and odd, must be incomplete, so return zeros
+            dense = np.zeros(n_bins, dtype=float)
+            return np.array2string(
+                dense, precision=precision, separator=separator,
+                floatmode=floatmode, suppress_small=suppress_small,
+                max_line_width=1_000_000
+            )
+
+    triples = vals.reshape(-1, 2)
+    col_index = triples[:, 0]
+    value = triples[:, 1]
+
+    # Filter out invalid entries
+    # Condition 1: Discard indices > n_bins
+    valid_mask = col_index <= n_bins
+    # Condition 2: Discard values > 1
+    valid_mask = valid_mask & (value <= 1.0)
+
+    # Apply the mask to filter valid entries
+    col_index = col_index[valid_mask]
+    value = value[valid_mask]
+
+    #print(f"Filtered entries: {valid_mask.sum()} valid out of {len(valid_mask)} total")
+
+    # Build dense row
+    dense = np.zeros(n_bins, dtype=float)
+
+    if mode == "index":
+        # i,j as integer-like indices
+        j_idx = np.rint(col_index).astype(int)
+        cols = np.clip(j_idx, 0, n_bins - 1)
+        np.add.at(dense, cols, value)
+
+    # Format dense row as a compact string (no spaces)
+    return np.array2string(
+        dense, precision=precision, separator=separator,
+        floatmode=floatmode, suppress_small=suppress_small,
+        max_line_width=1_000_000
+    )
+
+def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer=None, model_name=None):
+    """
+    Test 1D distribution examples across multiple distribution pairs.
+    
+    Args:
+        cfg: Hydra configuration
+        pytorch_model: Pre-loaded model (optional). If None, will load from config.
+        tokenizer: Pre-loaded tokenizer (optional). If None, will load from config.
+    """
+    import matplotlib.pyplot as plt
+    import ot
+
+    # --- tiny adapter to match hist_from_samplers API ---
+    class NumpySampler:
+        def __init__(self, fn, name=None):
+            self.fn = fn  # fn(n) -> np.ndarray of shape (n,)
+            self.name = name or "NumpySampler"
+        def sample(self, n):
+            x = self.fn(n).astype(np.float32)
+            return torch.from_numpy(x).view(-1, 1)  # (n, 1)
+
+    def zscore(x, eps=1e-8):
+        x = (x - x.mean()) / (x.std() + eps)
+        return x
+
+    # --- distribution factories (all return NumpySampler with a .name) ---
+    def BetaLeft(a=2.0, b=5.0):
+        return NumpySampler(lambda n: zscore(np.random.beta(a, b, size=n)),
+                            name=f"BetaLeft")
+
+    def BetaRight(a=5.0, b=2.0):
+        return NumpySampler(lambda n: zscore(np.random.beta(a, b, size=n)),
+                            name=f"BetaRight")
+
+    def LogNormal(mu=0.0, sigma=0.5):
+        return NumpySampler(lambda n: zscore(np.random.lognormal(mean=mu, sigma=sigma, size=n)),
+                            name=f"LogNormal")
+
+    def Laplace(loc=0.0, scale=1.0):
+        return NumpySampler(lambda n: zscore(np.random.laplace(loc, scale, size=n)),
+                            name=f"Laplace")
+
+    def StudentT(df=3):
+        return NumpySampler(lambda n: zscore(np.random.standard_t(df, size=n)),
+                            name=f"StudentT")
+
+    def CauchyTrunc(x0=0.0, gamma=1.0, clip=6.0):
+        def _f(n):
+            x = np.random.standard_cauchy(size=n) * gamma + x0
+            x = np.clip(x, -clip, clip)
+            return zscore(x)
+        return NumpySampler(_f, name=f"CauchyTrunc")
+
+    def Triangular(left=-2.0, mode=0.0, right=2.0):
+        return NumpySampler(lambda n: zscore(np.random.triangular(left, mode, right, size=n)),
+                            name=f"Triangular")
+
+    def UniformLowHigh(low=-2.0, high=2.0):
+        return NumpySampler(lambda n: zscore(np.random.uniform(low, high, size=n)),
+                            name=f"Uniform")
+
+    def GaussianShifted(mu=1.5, sigma=1.0):
+        return NumpySampler(lambda n: zscore(np.random.normal(mu, sigma, size=n)),
+                            name=f"GaussianShifted")
+
+    def GaussianMixture(means=(-2.0, 2.0), sigmas=(0.7, 0.7), weights=(0.5, 0.5)):
+        means, sigmas, weights = np.array(means), np.array(sigmas), np.array(weights)
+        weights = weights / weights.sum()
+        def _f(n):
+            comps = np.random.choice(len(weights), size=n, p=weights)
+            x = np.random.normal(loc=means[comps], scale=sigmas[comps])
+            return zscore(x)
+        return NumpySampler(_f, name=f"GaussianMixture")
+
+    def Exponential(scale=1.0):
+        return NumpySampler(lambda n: zscore(np.random.exponential(scale, size=n)),
+                            name=f"Exponential")
+
+    def Weibull(a=1.5, scale=1.0):
+        return NumpySampler(lambda n: zscore(scale * np.random.weibull(a, size=n)),
+                            name=f"Weibull")
+
+    def Gamma(shape=2.0, scale=1.0):
+        return NumpySampler(lambda n: zscore(np.random.gamma(shape, scale, size=n)),
+                            name=f"Gamma")
+
+    def Pareto(a=2.5, clip=10.0):
+        def _f(n):
+            x = np.random.pareto(a, size=n)
+            x = np.clip(x, 0, clip)
+            return zscore(x)
+        return NumpySampler(_f, name=f"Pareto")
+
+    def Cosine():
+        return NumpySampler(lambda n: np.cos(zscore(np.random.rand(n) * np.pi - np.pi/2)),
+                            name="Cosine")
+
+    def BimodalUniform(low1=-3, high1=-1, low2=1, high2=3, p=0.5):
+        def _f(n):
+            mask = np.random.rand(n) < p
+            x = np.empty(n)
+            x[mask] = np.random.uniform(low1, high1, size=mask.sum())
+            x[~mask] = np.random.uniform(low2, high2, size=(~mask).sum())
+            return zscore(x)
+        return NumpySampler(_f, name=f"BimodalUniform")
+
+    def GaussianMixtureWideNarrow():
+        return GaussianMixture(means=(0, 0), sigmas=(0.3, 2.0), weights=(0.5, 0.5))
+
+    # New sampler pairs to rotate through (source, target)
+    sampler_pairs = [
+        (BetaLeft(), BetaRight()),                     # skewed vs opposite skew
+        (Laplace(), UniformLowHigh()),                 # heavy-tail vs uniform
+        (StudentT(df=5), GaussianShifted(mu=1.0)),     # t vs shifted normal
+        (LogNormal(sigma=0.6), Laplace(scale=1.5)),    # skewed heavy-tail vs laplace
+        (CauchyTrunc(clip=5.0), StudentT(df=3)),       # very heavy-tail (trunc) vs heavy-tail
+        (Triangular(-3, 0, 3), UniformLowHigh(-3, 3)), # triangular vs uniform
+        (GaussianMixture(means=(-2, 2), sigmas=(0.7, 0.7), weights=(0.4, 0.6)),
+        GaussianMixture(means=(-3, 0, 3), sigmas=(0.6, 0.5, 0.6), weights=(0.2, 0.6, 0.2))),
+        # --- extra pairs ---
+        (Exponential(scale=1.0), Weibull(a=2.0)),        # skew vs flexible skew
+        (Gamma(2.0), LogNormal(mu=0.0, sigma=0.8)),      # gamma vs lognormal
+        (Pareto(a=2.5), Laplace(scale=1.0)),             # fat tail vs double exponential
+        (BimodalUniform(), GaussianMixture()),           # bimodal uniform vs Gaussian mixture
+        (Cosine(), Triangular(-2, 0, 2)),                # bounded oscillatory vs triangular
+        (GaussianMixtureWideNarrow(), StudentT(df=2)),   # wide/narrow mixture vs heavy tail
+        (UniformLowHigh(-5, 5), Pareto(a=3.0)),          # flat vs power-law
+    ]
+
+    # Add reciprocal pairs immediately after each original pair
+    sampler_pairs_with_reciprocals = []
+    for a, b in sampler_pairs:
+        sampler_pairs_with_reciprocals.append((a, b))
+        sampler_pairs_with_reciprocals.append((b, a))
+
+    # Load the pre-trained model if not provided
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+
+    logger.info("Using pre-loaded model (skipping model loading)")
+
+    # Collect results across trials
+    all_results = []
+    all_figures = []  # Store figures for notebook
+    n_samples   = 1_000
+    n_bins      = cfg.data.dataset.support_size
+    metric      = 'sqeuclidean'  
+    cost_fixed  = True
+    row_wise    = True
+
+    # Evaluate distribution pairs
+    for idx, (X_sampler, Y_sampler) in enumerate(sampler_pairs_with_reciprocals):
+
+        logger.info(f"Evaluating pair {idx+1}/{len(sampler_pairs_with_reciprocals)}: {X_sampler.name} -> {Y_sampler.name}")
+
+        source, target, _ = hist_from_samples(
+            X_sampler, Y_sampler, bins=n_bins, density=False
+        )
+
+        # Define support points
+        if cost_fixed:
+            # fixed C case
+            xs = np.arange(n_bins, dtype=np.float32)[:, None]
+            xt = np.arange(n_bins, dtype=np.float32)[:, None]
+        else:
+            # variable C case
+            xs = np.random.uniform(low=[-1, -1],high=[1, 1], size=(n_bins, 2))
+            xt = np.random.uniform(low=[1, 1],  high=[3, 3], size=(n_bins, 2))
+        # Define cost matrix
+        C = ot.dist(xs, xt, metric=metric)
+        C /= C.max()
+
+        # Compute ground truth OT plan using POT
+        otplan_solve = ot.solve(
+            C, a=source, b=target
+        )
+
+        otplan_solve_sparse = otplan_solve.sparse_plan
+        otplan_solve_dense  = otplan_solve.plan
+        # Convert source/target distributions to tensors
+        source_tensor = torch.tensor(source, dtype=my_dtype_torch)
+        target_tensor = torch.tensor(target, dtype=my_dtype_torch)
+
+        # Yield individual bin samples
+        if row_wise:
+            encoder_input = []
+            for j in range(n_bins):
+                input_idx = [j / n_bins]
+                input_total = torch.hstack((
+                    source_tensor,
+                    target_tensor,
+                    torch.tensor(input_idx, dtype=my_dtype_torch)
+                )).to(my_dtype_torch)
+                encoder_input.append(input_total)
+        else:
+            input_total = torch.hstack((
+                source_tensor,
+                target_tensor
+            )).to(my_dtype_torch)
+
+        encoder_input = torch.stack(encoder_input).to(device)
+
+        # Run model inference
+        text_ids_pred = pytorch_model.generate(
+            encoder_input,
+            temperature=0.1,
+            max_seq_len=cfg.model.decoder.seq_dim
+        )
+        text_pred = tokenizer.from_tokens(text_ids_pred)
+        text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
+
+        # ensure integer row indices
+        row_idx = (n_bins * encoder_input[:, -1].detach().cpu().numpy()).astype(int)
+        text_pred_dense = [sparse_row_string_to_dense_string(t, n_bins, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
+        #print("target: ", [coo_row_to_string(ot_map_sparse, j) for j in range(n_bins)])
+        #print("pred:   ", text_pred)
+        ot_pred = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
+        # build sparse matrix directly
+        ot_pred_sparse = sparse.coo_matrix(
+            ot_pred, shape=otplan_solve_sparse.shape
+        )
+
+        # Calculate MSE ours
+        mse_diff_dense  = mean_squared_error(otplan_solve_dense.flatten(), ot_pred.flatten())
+        mse_diff_sparse = utils.sparse_mse(otplan_solve_sparse, ot_pred_sparse)
+        otcost_gt     = otplan_solve.value
+        otcost_pred   = np.sum(ot_pred_sparse * C)
+        otcost_diff   = abs(otcost_pred - otcost_gt)
+
+        # Compute metrics
+        ot_plan_pred = ot_pred
+        ot_plan_gt   = otplan_solve_dense
+
+        all_results.append({
+            'source': X_sampler.name,
+            'target': Y_sampler.name,
+            'OT Cost diff': otcost_diff,
+            'MSE diff dense': mse_diff_dense,
+            'MSE diff sparse': mse_diff_sparse
+        })
+
+        # Create visualization
+        fig, axarr = plt.subplots(1, 5, figsize=(18, 3.5), dpi=120)
+        fig.suptitle(f"{X_sampler.name} → {Y_sampler.name}", fontsize=16, y=1.02)
+
+        # Titles
+        axarr[0].set_title(f"Source $\\mu$ (1D)", fontsize=12)
+        axarr[1].set_title(f"Target $\\nu$ (1D)", fontsize=12)
+        axarr[2].set_title("Cost Matrix", fontsize=12)
+        axarr[3].set_title(r"$\hat{\pi}$ Model Prediction", fontsize=12)
+        axarr[4].set_title(r"$\pi$ Ground Truth (POT)", fontsize=12)
+
+        # Common vmin/vmax for OT plans
+        vmin = 0
+        vmax = max(np.max(ot_plan_pred), np.max(ot_plan_gt))
+
+        # --- Source (bar) ---
+        bin_edges = np.arange(len(source) + 1)
+        axarr[0].bar(
+            bin_edges[:-1], source,
+            width=1.0, color="tab:blue", alpha=0.7, edgecolor="black"
+        )
+        axarr[0].set_xlim(0, len(source))
+        axarr[0].set_ylim(0, max(source.max(), target.max()) * 1.1)
+        axarr[0].set_xlabel("Bin index")
+        axarr[0].set_ylabel("Probability")
+
+        # --- Target (bar) ---
+        bin_edges = np.arange(len(target) + 1)
+        axarr[1].bar(
+            bin_edges[:-1], target,
+            width=1.0, color="tab:orange", alpha=0.7, edgecolor="black"
+        )
+        axarr[1].set_xlim(0, len(target))
+        axarr[1].set_ylim(0, max(source.max(), target.max()) * 1.1)
+        axarr[1].set_xlabel("Bin index")
+        axarr[1].set_ylabel("Probability")
+        
+        # --- Cost matrix ---
+        im2 = axarr[2].imshow(C, cmap='Blues', origin='lower', aspect="auto")
+        axarr[2].set_xlabel("Target bins")
+        axarr[2].set_ylabel("Source bins")
+        plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
+        
+        # --- Model Prediction ---
+        im3 = axarr[3].imshow(ot_plan_pred, cmap='Reds', vmin=vmin, vmax=vmax, 
+                             origin='lower', aspect="auto")
+        axarr[3].set_xlabel("Target bins")
+        axarr[3].set_ylabel("Source bins")
+        axarr[3].text(0.02, 0.98, f'W={otcost_pred:.3e}', 
+                     transform=axarr[3].transAxes, fontsize=10,
+                     verticalalignment='top', bbox=dict(boxstyle='round', 
+                     facecolor='white', alpha=0.8))
+        plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
+        
+        # --- Ground truth ---
+        im4 = axarr[4].imshow(ot_plan_gt, cmap='Greens', vmin=vmin, vmax=vmax, 
+                             origin='lower', aspect="auto")
+        axarr[4].set_xlabel("Target bins")
+        axarr[4].set_ylabel("Source bins")
+        axarr[4].text(0.02, 0.98, f'W={otcost_gt:.3e}', 
+                     transform=axarr[4].transAxes, fontsize=10,
+                     verticalalignment='top', bbox=dict(boxstyle='round', 
+                     facecolor='white', alpha=0.8))
+        plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
+        
+        # Add error metrics text
+        fig.text(0.5, -0.02, f'MSE (dense): {mse_diff_dense:.3e}  |  MSE (sparse): {mse_diff_sparse:.3e}  |  ' + 
+                f'Relative W Error: {abs(otcost_pred - otcost_gt)/otcost_gt * 100:.2f}%',
+                ha='center', fontsize=11, bbox=dict(boxstyle='round', 
+                facecolor='lightyellow', alpha=0.8))
+
+        plt.tight_layout()
+        
+        # Store figure for notebook
+        all_figures.append({
+            'fig': fig,
+            'source': X_sampler.name,
+            'target': Y_sampler.name,
+            'idx': idx
+        })
+        # Don't close yet - we need the figure for the notebook
+        # plt.close()
+    
+    # Prepare summary table data
+    table_data = []
+    for r in all_results:
+        table_data.append([
+            r['source'],
+            r['target'],
+            f"{r['OT Cost diff']:.3e}",
+            f"{r['MSE diff dense']:.3e}",
+            f"{r['MSE diff sparse']:.3e}"
+        ])
+    
+    headers = ['Source', 'Target', 'OT Cost Diff', 'MSE Diff (dense)', 'MSE Diff (sparse)']
+    
+    # Print summary table to terminal
+    logger.info("\n" + "="*80)
+    logger.info("SUMMARY OF RESULTS")
+    logger.info("="*80)
+    table_str_terminal = tabulate(table_data, headers=headers, tablefmt='grid', floatfmt=".3e")
+    logger.info("\n" + table_str_terminal)
+    
+    # Create Jupyter notebook with results
+    logger.info("\n" + "="*80)
+    logger.info("Creating Jupyter notebook with results")
+    logger.info("="*80)
+    
+    nb = new_notebook()
+    cells = []
+    
+    # Add title cell
+    cells.append(new_markdown_cell("# Optimal Transport Inference Results\n\n"
+                                   f"Total pairs evaluated: {len(all_results)}"))
+    
+    # Add summary table
+    cells.append(new_markdown_cell("## Summary Table"))
+    table_str_notebook = tabulate(table_data, headers=headers, tablefmt='pipe', floatfmt=".3e")
+    cells.append(new_markdown_cell(table_str_notebook))
+    
+    # Add each figure as embedded image
+    cells.append(new_markdown_cell("## Individual Results"))
+    
+    for fig_data in all_figures:
+        # Add markdown header for this pair
+        cells.append(new_markdown_cell(f"### {fig_data['idx']}: {fig_data['source']} → {fig_data['target']}"))
+        
+        # Convert figure to base64 for embedding
+        buf = BytesIO()
+        fig_data['fig'].savefig(buf, format='png', bbox_inches='tight', dpi=120)
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        buf.close()
+        
+        # Create an empty code cell with the figure as output (no code visible)
+        cell = new_code_cell("")
+        cell.outputs = [
+            nbformat.v4.new_output(
+                output_type='display_data',
+                data={'image/png': img_base64},
+                metadata={}
+            )
+        ]
+        cells.append(cell)
+    
+    # Now close all figures
+    import matplotlib.pyplot as plt
+    plt.close('all')
+    
+    nb.cells = cells
+    
+    # Save notebook
+    os.makedirs(cfg.inference.out_dir, exist_ok=True)
+    notebook_path = os.path.join(cfg.inference.out_dir, f'inference_{model_name}.ipynb')
+    
+    with open(notebook_path, 'w') as f:
+        nbformat.write(nb, f)
+    
+    logger.info(f"Saved notebook to: {notebook_path}")
+    logger.info(f"Open with: jupyter notebook {notebook_path}")
+    
+    return all_results
+
 @hydra.main(version_base=None, config_path="configs", config_name="config")
 def main(cfg: DictConfig):
     """
@@ -417,8 +809,9 @@ def main(cfg: DictConfig):
     # Set world_size if not specified
     if cfg.training.world_size is None: cfg.training.world_size = torch.cuda.device_count()
 
-    #TODO: logger.info(f"Starting distributed training with {cfg.training.world_size} GPUs")
-    # For GPU training, run directly without multiprocessing
+
+    # Regular inference routine
+    logger.info("Running standard inference routine")
     inference_routine(cfg)
 
 if __name__ == "__main__":

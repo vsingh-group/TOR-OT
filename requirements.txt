@@ -19,6 +19,8 @@ POT
 
 #plotting
 matplotlib
+tabulate
+nbformat
 
 #configs 
 gin-config

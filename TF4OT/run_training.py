@@ -156,7 +156,6 @@ def training_routine(rank, cfg):
     pytorch_model = DDP(pytorch_model, device_ids=[rank])
     # the core model is now accessible as pytorch_model.module
 
-
     optimizer = optim.Adam(pytorch_model.parameters(), lr=5e-5)
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
 

@@ -18,6 +18,7 @@ from typing import Dict
 from tqdm.auto import tqdm
 from datasets import Dataset, DatasetDict
 from huggingface_hub import HfApi, create_repo
+from TF4OT.utils import my_dtype_np, my_dtype_torch
 
 def coo_tolist(A: sp.coo_matrix, j: int) -> list:
     """
@@ -68,8 +69,6 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
     Yields:
         Dictionary containing a single sample
     """
-    my_dtype_np    = np.float64
-    my_dtype_torch = torch.float64
 
     print(f"Generating {dataset_size} samples with {n_bins} bins...")
 
@@ -129,7 +128,7 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
                 input_total = torch.hstack((
                     source_tensor,
                     target_tensor,
-                    torch.tensor([j / n_bins], dtype=my_dtype_torch)
+                    torch.tensor(input_idx, dtype=my_dtype_torch)
                 )).to(my_dtype_torch).to(device)
 
                 yield {
@@ -344,7 +343,6 @@ def main():
     parser.add_argument("--repo_name", type=str, help="Repository name for Hugging Face Hub (e.g., 'username/ot-dataset')")
     parser.add_argument("--token", type=str, help="Hugging Face token (if not provided, will use token from huggingface_hub login)")
     parser.add_argument("--private", action="store_true", help="Make the repository private")
-    parser.add_argument("--precision", type=int, default=3, help="Precision for sparse matrix string formatting (default: 3)")
 
     args = parser.parse_args()
 
@@ -355,7 +353,6 @@ def main():
     print(f"Creating dataset with {args.n_bins} bins and {args.dataset_size} samples")
     print(f"Output directory: {output_dir}")
     print(f"Device: {args.device}")
-    print(f"Precision: {args.precision}")
     
     # Create dataset using generator
     print("Creating Hugging Face dataset...")

@@ -1,12 +1,16 @@
 import torch
+import numpy as np
+from scipy import sparse
+#mydtype = torch.float32
 
+my_dtype_np    = np.float32
+my_dtype_torch = torch.float32
 
 def collate_from_double(batch):
     """
     Custom collate_fn that stacks fixed-size tensors but leaves
     variable-length lists (like 'output_map_sparse') as Python lists.
     """
-    mydtype = torch.float32
     elem = batch[0]
     batch_out = {}
     for key in elem:
@@ -18,10 +22,10 @@ def collate_from_double(batch):
         else:
             try:
                 #batch_out[key] = default_collate(values)
-                batch_out[key] = torch.tensor(values, dtype=mydtype)
+                batch_out[key] = torch.tensor(values, dtype=my_dtype_torch)
             except Exception:
                 # fallback for non-stackable items
-                batch_out[key] = torch.tensor(values, dtype=mydtype)
+                batch_out[key] = torch.tensor(values, dtype=my_dtype_torch)
     return batch_out
 
 def collate_from_string(batch):
@@ -29,7 +33,6 @@ def collate_from_string(batch):
     Custom collate_fn that stacks fixed-size tensors but leaves
     variable-length lists (like 'output_map_sparse') as Python lists.
     """
-    mydtype = torch.float32
     elem = batch[0]
     batch_out = {}
     for key in elem:
@@ -44,7 +47,7 @@ def collate_from_string(batch):
                 batch_out[key] = torch.tensor(values)
             except Exception:
                 # fallback for non-stackable items
-                batch_out[key] = torch.tensor(values, dtype=mydtype)
+                batch_out[key] = torch.tensor(values, dtype=my_dtype_torch)
     return batch_out
 
 def to_string_lists(data, decimals=3):
@@ -76,3 +79,18 @@ def to_string_lists(data, decimals=3):
         formatted_list.append(formatted_str)
 
     return formatted_list
+
+def sparse_mse(A: sparse.coo_matrix, B: sparse.coo_matrix) -> float:
+    if A.shape != B.shape:
+        raise ValueError(f"Shape mismatch: {A.shape} vs {B.shape}")
+    diff = A - B
+    sq_norm = diff.multiply(diff).sum()
+    
+    # Count non-zero elements in union of A and B
+    union = A.astype(bool) + B.astype(bool)
+    nnz = union.nnz
+    
+    if nnz == 0:
+        return 0.0
+    
+    return float(sq_norm) / nnz

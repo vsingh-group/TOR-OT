@@ -41,7 +41,7 @@ model:
     dropout:                0
 
 training:
-  num_epochs:     8
+  num_epochs:     100
   batch_size_per_device:     128
   learning_rate:  1e-4
   use_amp:        true
@@ -65,3 +65,4 @@ inference:
   use_amp:      ${training.use_amp}
   batch_size:   128
   threshold:    50
+  test_distributions: true  # Set to true to run distribution pair tests
