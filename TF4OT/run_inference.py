@@ -20,6 +20,7 @@ from nbformat.v4 import new_notebook, new_markdown_cell, new_code_cell
 from tabulate import tabulate
 import base64
 from io import BytesIO
+import itertools
 
 # Add Hydra imports
 import hydra
@@ -29,6 +30,7 @@ from hydra.utils import instantiate
 # Setup logging
 logger = logging.getLogger(__name__)
 
+row_wise = True
 
 def inference_routine(cfg):
     """
@@ -50,16 +52,7 @@ def inference_routine(cfg):
     # if cfg.model.name is not defined then create a new name:
     name = cfg.model["name"] if "name" in cfg.model else None
     if name: model_name = f"{name}.pth"
-    else:
-        model_name = (
-            f"model_n{cfg.data.dataset.size}"
-            f"_support{cfg.data.dataset.support_size}"
-            f"_ep{cfg.training.num_epochs}"
-            f"_dec_units_{cfg.model.decoder.units}"
-            f"_nlayers_{cfg.model.decoder.num_transformer_layers}"
-            f"_nheads_{cfg.model.decoder.num_attention_heads}"
-            f"_drop_{cfg.model.decoder.dropout}"
-        )
+    else: model_name = utils.get_model_name_from_cfg(cfg)
 
     # Set default directory if not provided
     os.makedirs(cfg.model.save_path, exist_ok=True)
@@ -77,51 +70,338 @@ def inference_routine(cfg):
     dataset     = load_dataset(cfg.data.hf_dataset, cache_dir=cfg.data.hf_cache_dir)
     test_data   = dataset["test"]
     test_loader = DataLoader(test_data,
-                            batch_size=cfg.training.batch_size,
+                            batch_size=cfg.inference.batch_size,
                             shuffle=False,
                             num_workers=cfg.data.loading.num_workers,
                             pin_memory=(device.type == "cuda"),
                             collate_fn=utils.collate_from_string
     )
-    logger.info(f"test_size={len(test_data)}, test.batch_size={cfg.training.batch_size}, "
+    logger.info(f"test_size={len(test_data)}, test.batch_size={cfg.inference.batch_size}, "
                 f"batches_per_epoch={len(test_loader)}")
 
     # Create Tokenizer
     logger.info("Creating Tokenizer")
-    # TODO: add support for other tokenizers
+    # TODO: add support for more tokenizers
+    OT_SOURCE_DIST         = "source_dist"
+    OT_TARGET_DIST         = "target_dist"
     OT_INPUT_TOTAL         = "input_total"
     OT_INPUT_COST_MATRIX   = "input_cost_matrix"
-    OT_TARGET_PLAN_MATRIX  = "target_otplan_solve_sparse"
-    OT_TARGET_PLAN_MATRIX2 = "output_map_sparse"
-
-    pytorch_model.eval()
-    with torch.no_grad():
-        pbar = tqdm(test_loader, total=len(test_loader))
-        for batch in pbar:
-
-            encoder_input_ab = batch[OT_INPUT_TOTAL]
-            encoder_input_ab = encoder_input_ab.to(device)
-
-            text_input, pad_mask = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=False)
-
-            pad_mask      = torch.cat([torch.full((encoder_input_ab.shape[0], 1), True), pad_mask], dim=1)
-            text_ids_pred = pytorch_model.generate(encoder_input_ab,
-                                                    temperature=0.1,
-                                                    max_seq_len=cfg.model.decoder.seq_dim)
-            text_pred = tokenizer.from_tokens(text_ids_pred)
-
-            for target, pred in zip(utils.to_string_lists(batch[OT_TARGET_PLAN_MATRIX], cfg.tokenizer.DigitTokenizer.decimal_precision), text_pred):
-                print ("target: ", target)
-                print ("pred:   ", pred[:pred.find(']')+1])
-                print ('====================================')
-            break
+    OT_TARGET_PLAN_MATRIX_SPARSE  = "target_otplan_solve_sparse"
+    OT_TARGET_PLAN_MATRIX_DENSE   = "target_otplan_solve_dense"
 
     # Run distribution pair tests if enabled
-    if hasattr(cfg.inference, 'test_distributions') and cfg.inference.test_distributions:
+    if hasattr(cfg.inference, 'test_custom_distributions') and cfg.inference.test_custom_distributions:
         logger.info(f"\n{'='*80}")
         logger.info("Starting distribution pair tests...")
         logger.info(f"{'='*80}\n")
         test_1d_distribution_examples(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_name=model_name)
+
+    # Limit test batches if not testing full dataset
+    if hasattr(cfg.inference, 'test_all_testset') and cfg.inference.test_all_testset:
+        test_batches  = test_loader
+        total_batches = len(test_loader)
+    else:
+        test_batches  = itertools.islice(test_loader, 10)
+        total_batches = min(10, len(test_loader))
+
+    pytorch_model.eval()
+    
+    # Initialize lists to collect metrics and figures
+    all_mse_dense = []
+    all_mse_sparse = []
+    all_otcost_diff = []
+    all_figures = []
+    all_results = []
+    
+    # Import matplotlib for visualizations
+    import matplotlib.pyplot as plt
+    
+    n_bins = cfg.data.dataset.support_size
+    
+    with torch.no_grad():
+        pbar = tqdm(test_batches, total=total_batches)
+        for batch_idx, batch in enumerate(pbar):
+
+            # Run model INFERENCE
+            encoder_input_ab = batch[OT_INPUT_TOTAL].to(device)
+            text_ids_pred = pytorch_model.generate(encoder_input_ab=encoder_input_ab,
+                                                   encoder_input_C=None,
+                                                   temperature=0.1,
+                                                   max_seq_len=cfg.model.decoder.seq_dim)
+            text_pred = tokenizer.from_tokens(text_ids_pred)
+            text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
+
+            text_pred_dense = [sparse_row_string_to_dense_string(t, cfg.data.dataset.support_size, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
+            ot_pred_dense   = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
+            ot_pred_dense_np = ot_pred_dense.copy()  # Keep numpy version for visualization
+            ot_pred_dense   = torch.tensor(ot_pred_dense, dtype=my_dtype_torch)
+            ot_pred_sparse  = sparse.coo_matrix(ot_pred_dense)
+
+            ot_target_batch  = batch[OT_TARGET_PLAN_MATRIX_DENSE]
+            ot_target_dense  = ot_target_batch
+            ot_target_dense_np = ot_target_dense.cpu().numpy()  # Keep numpy version for visualization
+            ot_target_sparse = sparse.coo_matrix(ot_target_dense)
+
+            # Calculate MSE diff
+            mse_diff_dense  = mean_squared_error(ot_target_dense.flatten(), ot_pred_dense.flatten())
+            mse_diff_sparse = utils.sparse_mse(ot_target_sparse, ot_pred_sparse)
+
+            # Calculate OT cost diff
+            C = batch[OT_INPUT_COST_MATRIX][0]
+            C = C.detach().clone().to(dtype=my_dtype_torch)
+            C_np = C.cpu().numpy()  # Keep numpy version for visualization
+            otcost_gt     = (ot_target_dense * C).sum()
+            otcost_pred   = (ot_pred_dense   * C).sum()
+            otcost_diff   = abs(otcost_pred - otcost_gt).item()
+
+            # Collect metrics
+            all_mse_dense.append(mse_diff_dense)
+            all_mse_sparse.append(mse_diff_sparse)
+            all_otcost_diff.append(otcost_diff)
+            
+            # Store results for table
+            all_results.append({
+                'batch_idx': batch_idx,
+                #'MSE diff dense': mse_diff_dense,
+                'MSE Diff (sparse)': mse_diff_sparse,
+                'OT Cost Diff': otcost_diff,
+                #'OT Cost GT': otcost_gt.item(),
+               # 'OT Cost Pred': otcost_pred.item()
+            })
+            
+            # Create visualization for first sample in batch
+            source = batch[OT_SOURCE_DIST][0].cpu().numpy()
+            target = batch[OT_TARGET_DIST][0].cpu().numpy()
+            
+            # Only create figures for first few batches to avoid memory issues
+            if batch_idx < min(20, total_batches):
+                fig, axarr = plt.subplots(1, 5, figsize=(18, 3.5), dpi=120)
+                fig.suptitle(f"Batch {batch_idx}", fontsize=16, y=1.02)
+                
+                # Titles
+                axarr[0].set_title(f"Source $\\mu$", fontsize=12)
+                axarr[1].set_title(f"Target $\\nu$", fontsize=12)
+                axarr[2].set_title("Cost Matrix", fontsize=12)
+                axarr[3].set_title(r"$\hat{\pi}$ Model Prediction", fontsize=12)
+                axarr[4].set_title(r"$\pi$ Ground Truth", fontsize=12)
+                
+                # Common vmin/vmax for OT plans
+                vmin = 0
+                vmax = max(np.max(ot_pred_dense_np[0]), np.max(ot_target_dense_np[0]))
+                
+                # --- Source (bar) ---
+                bin_edges = np.arange(len(source) + 1)
+                axarr[0].bar(
+                    bin_edges[:-1], source,
+                    width=1.0, color="tab:blue", alpha=0.7, edgecolor="black"
+                )
+                axarr[0].set_xlim(0, len(source))
+                axarr[0].set_ylim(0, max(source.max(), target.max()) * 1.1)
+                axarr[0].set_xlabel("Bin index")
+                axarr[0].set_ylabel("Probability")
+                
+                # --- Target (bar) ---
+                bin_edges = np.arange(len(target) + 1)
+                axarr[1].bar(
+                    bin_edges[:-1], target,
+                    width=1.0, color="tab:blue", alpha=0.7, edgecolor="black"
+                )
+                axarr[1].set_xlim(0, len(target))
+                axarr[1].set_ylim(0, max(source.max(), target.max()) * 1.1)
+                axarr[1].set_xlabel("Bin index")
+                axarr[1].set_ylabel("Probability")
+                
+                # --- Cost matrix ---
+                im2 = axarr[2].imshow(C_np, cmap='Blues', origin='lower', aspect="auto")
+                axarr[2].set_xlabel("Target bins")
+                axarr[2].set_ylabel("Source bins")
+                plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
+                
+                # --- Model Prediction ---
+                im3 = axarr[3].imshow(ot_pred_dense.cpu().numpy(), cmap='Reds', vmin=vmin, vmax=vmax, 
+                                     origin='lower', aspect="auto")
+                axarr[3].set_xlabel("Target bins")
+                axarr[3].set_ylabel("Source bins")
+                axarr[3].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_pred_sparse.sum():.5f}$', 
+                             transform=axarr[3].transAxes, fontsize=10,
+                             verticalalignment='top', bbox=dict(boxstyle='round', 
+                             facecolor='white', alpha=0.8))
+                plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
+                
+                # --- Ground truth ---
+                im4 = axarr[4].imshow(ot_target_dense.cpu().numpy(), cmap='Blues', vmin=vmin, vmax=vmax, 
+                                     origin='lower', aspect="auto")
+                axarr[4].set_xlabel("Target bins")
+                axarr[4].set_ylabel("Source bins")
+                axarr[4].text(0.02, 0.98, rf'$\sum \pi = {ot_target_sparse.sum():.5f}$', 
+                             transform=axarr[4].transAxes, fontsize=10,
+                             verticalalignment='top', bbox=dict(boxstyle='round', 
+                             facecolor='white', alpha=0.8))
+                plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
+                
+                # Add error metrics text
+                fig.text(0.5, -0.02, f'MSE diff (sparse): {mse_diff_sparse:.3e}  |  ' + 
+                        f'OT Cost Diff: {otcost_diff:.3e}',
+                        ha='center', fontsize=11, bbox=dict(boxstyle='round', 
+                        facecolor='lightyellow', alpha=0.8))
+                
+                plt.tight_layout()
+                
+                # Store figure for notebook
+                all_figures.append({
+                    'fig': fig,
+                    'batch_idx': batch_idx
+                })
+            
+            # Update progress bar with current metrics
+            pbar.set_postfix({
+                'mse_dense': f'{mse_diff_dense:.6f}',
+                'mse_sparse': f'{mse_diff_sparse:.6f}',
+                'otcost_diff': f'{otcost_diff:.6f}'
+            })
+    
+    # Convert to numpy arrays for statistics
+    all_mse_dense = np.array(all_mse_dense)
+    all_mse_sparse = np.array(all_mse_sparse)
+    all_otcost_diff = np.array(all_otcost_diff)
+    
+    # Print statistics
+    logger.info("\n" + "="*80)
+    logger.info("INFERENCE METRICS SUMMARY")
+    logger.info("="*80)
+    logger.info(f"Number of batches evaluated: {len(all_mse_dense)}")
+    logger.info("")
+    
+    # logger.info("MSE Diff (dense):")
+    # logger.info(f"  Mean:   {all_mse_dense.mean():.6f}")
+    # logger.info(f"  Median: {np.median(all_mse_dense):.6f}")
+    # logger.info(f"  Min:    {all_mse_dense.min():.6f}")
+    # logger.info(f"  Max:    {all_mse_dense.max():.6f}")
+    # logger.info(f"  Std:    {all_mse_dense.std():.6f}")
+    # logger.info("")
+    
+    logger.info("MSE Diff (sparse):")
+    logger.info(f"  Mean:   {all_mse_sparse.mean():.6f}")
+    logger.info(f"  Median: {np.median(all_mse_sparse):.6f}")
+    logger.info(f"  Min:    {all_mse_sparse.min():.6f}")
+    logger.info(f"  Max:    {all_mse_sparse.max():.6f}")
+    logger.info(f"  Std:    {all_mse_sparse.std():.6f}")
+    logger.info("")
+    
+    logger.info("OT Cost Difference:")
+    logger.info(f"  Mean:   {all_otcost_diff.mean():.6f}")
+    logger.info(f"  Median: {np.median(all_otcost_diff):.6f}")
+    logger.info(f"  Min:    {all_otcost_diff.min():.6f}")
+    logger.info(f"  Max:    {all_otcost_diff.max():.6f}")
+    logger.info(f"  Std:    {all_otcost_diff.std():.6f}")
+    logger.info("="*80 + "\n")
+    
+    # Prepare summary table data
+    table_data = []
+    for r in all_results:
+        table_data.append([
+            r['batch_idx'],
+            f"{r['OT Cost Diff']:.3e}",
+            #f"{r['MSE diff dense']:.3e}",
+            f"{r['MSE Diff (sparse)']:.3e}",
+            #f"{r['OT Cost GT']:.3e}",
+            #f"{r['OT Cost Pred']:.3e}"
+        ])
+    
+    headers = ['Batch', 'OT Cost Diff', 'MSE Diff (sparse)']
+    
+    # Print summary table to terminal
+    logger.info("\n" + "="*80)
+    logger.info("DETAILED RESULTS TABLE")
+    logger.info("="*80)
+    table_str_terminal = tabulate(table_data, headers=headers, tablefmt='grid', floatfmt=".3e")
+    logger.info("\n" + table_str_terminal)
+    
+    # Create Jupyter notebook with results
+    logger.info("\n" + "="*80)
+    logger.info("Creating Jupyter notebook with results")
+    logger.info("="*80)
+    
+    nb = new_notebook()
+    cells = []
+    
+    # Add title cell
+    cells.append(new_markdown_cell(
+        f"# Test Set Inference Results\n\n"
+        f"**Model:** {model_name}\n\n"
+        f"**Total batches evaluated:** {len(all_results)}\n\n"
+        f"**Dataset:** {cfg.data.hf_dataset}\n\n"
+        f"**Support size (n_bins):** {n_bins}"
+    ))
+    
+    # Add statistics summary
+    stats_md = f"""## Summary Statistics
+
+### MSE Sparse
+- **Mean:** {all_mse_sparse.mean():.6e}
+- **Median:** {np.median(all_mse_sparse):.6e}
+- **Min:** {all_mse_sparse.min():.6e}
+- **Max:** {all_mse_sparse.max():.6e}
+- **Std:** {all_mse_sparse.std():.6e}
+
+### OT Cost Difference
+- **Mean:** {all_otcost_diff.mean():.6e}
+- **Median:** {np.median(all_otcost_diff):.6e}
+- **Min:** {all_otcost_diff.min():.6e}
+- **Max:** {all_otcost_diff.max():.6e}
+- **Std:** {all_otcost_diff.std():.6e}
+"""
+    cells.append(new_markdown_cell(stats_md))
+    
+    # Add summary table
+    cells.append(new_markdown_cell("## Detailed Results Table"))
+    table_str_notebook = tabulate(table_data, headers=headers, tablefmt='pipe', floatfmt=".3e")
+    cells.append(new_markdown_cell(table_str_notebook))
+    
+    # Add individual visualizations
+    cells.append(new_markdown_cell("## Individual Batch Visualizations"))
+    
+    for fig_data in all_figures:
+        # Add markdown header for this batch
+        cells.append(new_markdown_cell(f"### Batch {fig_data['batch_idx']}"))
+        
+        # Convert figure to base64 for embedding
+        buf = BytesIO()
+        fig_data['fig'].savefig(buf, format='png', bbox_inches='tight', dpi=120)
+        buf.seek(0)
+        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        buf.close()
+        
+        plt.close(fig_data['fig'])
+        
+        # Create an empty code cell with the figure as output (no code visible)
+        cell = new_code_cell("")
+        cell.outputs = [
+            nbformat.v4.new_output(
+                output_type='display_data',
+                data={'image/png': img_base64},
+                metadata={}
+            )
+        ]
+        cells.append(cell)
+    
+    # Close all remaining figures
+    plt.close('all')
+    
+    nb.cells = cells
+    
+    # Save notebook
+    out_dir = getattr(cfg.inference, 'out_dir', './inference_results')
+    os.makedirs(out_dir, exist_ok=True)
+    notebook_path = os.path.join(out_dir, f'inference_testset_{model_name}.ipynb')
+    
+    with open(notebook_path, 'w') as f:
+        nbformat.write(nb, f)
+    
+    logger.info(f"Saved notebook to: {notebook_path}")
+    logger.info(f"Open with: jupyter notebook {notebook_path}")
+    logger.info("="*80 + "\n")
+
 
 def load_model_by_name(full_save_path: str, device: str = "cuda"):
     """
@@ -238,7 +518,7 @@ def hist_from_samples(X_sampler, Y_sampler, bins=80, density=False, trim_percent
     probsX = counts_X / counts_X.sum()     # sums to 1 exactly (ignores out-of-range)
     counts_Y, _ = np.histogram(Y_np, bins=bin_edges, density=density)
     probsY = counts_Y / counts_Y.sum()     # sums to 1 exactly (ignores out-of-range)
-    return probsX, probsY, bin_edges    
+    return probsX, probsY, bin_edges
 
 def sparse_row_string_to_dense_string(
     s: str,
@@ -394,9 +674,10 @@ def sparse_row_string_to_dense_string(
     )
 
 def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer=None, model_name=None):
+
     """
     Test 1D distribution examples across multiple distribution pairs.
-    
+
     Args:
         cfg: Hydra configuration
         pytorch_model: Pre-loaded model (optional). If None, will load from config.
@@ -404,7 +685,6 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
     """
     import matplotlib.pyplot as plt
     import ot
-
     # --- tiny adapter to match hist_from_samplers API ---
     class NumpySampler:
         def __init__(self, fn, name=None):
@@ -530,16 +810,15 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
 
     # Load the pre-trained model if not provided
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
 
     logger.info("Using pre-loaded model (skipping model loading)")
 
     # Collect results across trials
     all_results = []
     all_figures = []  # Store figures for notebook
-    n_samples   = 1_000
+    n_samples   = 1_000_000
     n_bins      = cfg.data.dataset.support_size
-    metric      = 'sqeuclidean'  
+    metric      = 'sqeuclidean'
     cost_fixed  = True
     row_wise    = True
 
@@ -578,7 +857,7 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
 
         # Yield individual bin samples
         if row_wise:
-            encoder_input = []
+            encoder_input_ab = []
             for j in range(n_bins):
                 input_idx = [j / n_bins]
                 input_total = torch.hstack((
@@ -586,44 +865,42 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
                     target_tensor,
                     torch.tensor(input_idx, dtype=my_dtype_torch)
                 )).to(my_dtype_torch)
-                encoder_input.append(input_total)
+                encoder_input_ab.append(input_total)
         else:
-            input_total = torch.hstack((
+            encoder_input_ab = torch.hstack((
                 source_tensor,
                 target_tensor
             )).to(my_dtype_torch)
 
-        encoder_input = torch.stack(encoder_input).to(device)
+        encoder_input_ab = torch.stack(encoder_input_ab).to(device)
 
-        # Run model inference
+        # Run model INFERENCE
         text_ids_pred = pytorch_model.generate(
-            encoder_input,
+            encoder_input_ab=encoder_input_ab,
+            encoder_input_C=None,
             temperature=0.1,
             max_seq_len=cfg.model.decoder.seq_dim
         )
         text_pred = tokenizer.from_tokens(text_ids_pred)
         text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
 
-        # ensure integer row indices
-        row_idx = (n_bins * encoder_input[:, -1].detach().cpu().numpy()).astype(int)
         text_pred_dense = [sparse_row_string_to_dense_string(t, n_bins, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
-        #print("target: ", [coo_row_to_string(ot_map_sparse, j) for j in range(n_bins)])
-        #print("pred:   ", text_pred)
-        ot_pred = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
+        ot_pred_dense = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
         # build sparse matrix directly
         ot_pred_sparse = sparse.coo_matrix(
-            ot_pred, shape=otplan_solve_sparse.shape
+            ot_pred_dense, shape=otplan_solve_sparse.shape
         )
 
-        # Calculate MSE ours
-        mse_diff_dense  = mean_squared_error(otplan_solve_dense.flatten(), ot_pred.flatten())
+        # Calculate MSE diff
+        mse_diff_dense  = mean_squared_error(otplan_solve_dense.flatten(), ot_pred_dense.flatten())
         mse_diff_sparse = utils.sparse_mse(otplan_solve_sparse, ot_pred_sparse)
+        # Calculate OT cost diff
         otcost_gt     = otplan_solve.value
-        otcost_pred   = np.sum(ot_pred_sparse * C)
+        otcost_pred   = (ot_pred_dense * C).sum()
         otcost_diff   = abs(otcost_pred - otcost_gt)
 
         # Compute metrics
-        ot_plan_pred = ot_pred
+        ot_plan_pred = ot_pred_dense
         ot_plan_gt   = otplan_solve_dense
 
         all_results.append({
@@ -664,7 +941,7 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         bin_edges = np.arange(len(target) + 1)
         axarr[1].bar(
             bin_edges[:-1], target,
-            width=1.0, color="tab:orange", alpha=0.7, edgecolor="black"
+            width=1.0, color="tab:blue", alpha=0.7, edgecolor="black"
         )
         axarr[1].set_xlim(0, len(target))
         axarr[1].set_ylim(0, max(source.max(), target.max()) * 1.1)
@@ -682,26 +959,26 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
                              origin='lower', aspect="auto")
         axarr[3].set_xlabel("Target bins")
         axarr[3].set_ylabel("Source bins")
-        axarr[3].text(0.02, 0.98, f'W={otcost_pred:.3e}', 
+        axarr[3].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_pred_sparse.sum():.5f}$', 
                      transform=axarr[3].transAxes, fontsize=10,
                      verticalalignment='top', bbox=dict(boxstyle='round', 
                      facecolor='white', alpha=0.8))
         plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
-        
+
         # --- Ground truth ---
-        im4 = axarr[4].imshow(ot_plan_gt, cmap='Greens', vmin=vmin, vmax=vmax, 
+        im4 = axarr[4].imshow(ot_plan_gt, cmap='Blues', vmin=vmin, vmax=vmax, 
                              origin='lower', aspect="auto")
         axarr[4].set_xlabel("Target bins")
         axarr[4].set_ylabel("Source bins")
-        axarr[4].text(0.02, 0.98, f'W={otcost_gt:.3e}', 
+        axarr[4].text(0.02, 0.98, rf'$\sum \pi = {otplan_solve_sparse.sum():.5f}$', 
                      transform=axarr[4].transAxes, fontsize=10,
                      verticalalignment='top', bbox=dict(boxstyle='round', 
                      facecolor='white', alpha=0.8))
         plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
         
         # Add error metrics text
-        fig.text(0.5, -0.02, f'MSE (dense): {mse_diff_dense:.3e}  |  MSE (sparse): {mse_diff_sparse:.3e}  |  ' + 
-                f'Relative W Error: {abs(otcost_pred - otcost_gt)/otcost_gt * 100:.2f}%',
+        fig.text(0.5, -0.02, f'MSE Diff (sparse): {mse_diff_sparse:.3e}  |  ' + 
+                f'OT Cost Diff: {otcost_diff:.3e}',
                 ha='center', fontsize=11, bbox=dict(boxstyle='round', 
                 facecolor='lightyellow', alpha=0.8))
 
@@ -714,8 +991,6 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
             'target': Y_sampler.name,
             'idx': idx
         })
-        # Don't close yet - we need the figure for the notebook
-        # plt.close()
     
     # Prepare summary table data
     table_data = []
@@ -724,7 +999,6 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
             r['source'],
             r['target'],
             f"{r['OT Cost diff']:.3e}",
-            f"{r['MSE diff dense']:.3e}",
             f"{r['MSE diff sparse']:.3e}"
         ])
     
@@ -767,6 +1041,8 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         buf.close()
+
+        plt.close(fig_data['fig'])
         
         # Create an empty code cell with the figure as output (no code visible)
         cell = new_code_cell("")
@@ -782,19 +1058,19 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
     # Now close all figures
     import matplotlib.pyplot as plt
     plt.close('all')
-    
+
     nb.cells = cells
-    
+
     # Save notebook
     os.makedirs(cfg.inference.out_dir, exist_ok=True)
-    notebook_path = os.path.join(cfg.inference.out_dir, f'inference_{model_name}.ipynb')
-    
+    notebook_path = os.path.join(cfg.inference.out_dir, f'inference_custom_{model_name}.ipynb')
+
     with open(notebook_path, 'w') as f:
         nbformat.write(nb, f)
-    
+
     logger.info(f"Saved notebook to: {notebook_path}")
     logger.info(f"Open with: jupyter notebook {notebook_path}")
-    
+
     return all_results
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")

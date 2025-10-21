@@ -47,8 +47,8 @@ def prepare_dataset(cfg):
     train_data   = dataset["train"]
     train_loader = DataLoader(train_data,
                             batch_size=cfg.training.batch_size_per_device,
-                            shuffle=False,
-                            #num_workers=cfg.data.loading.num_workers,
+                            shuffle=False, #Handled by DistributedSampler
+                            num_workers=cfg.data.loading.num_workers,
                             pin_memory=True,
                             drop_last=True,
                             sampler=DistributedSampler(train_data),
@@ -65,7 +65,7 @@ def ddp_barrier():
             dist.barrier(device_ids=[torch.cuda.current_device()])
         except TypeError:
             # Older versions: no device_ids kwarg
-            dist.barrier()    
+            dist.barrier()
 
 def training_routine(rank, cfg):
     """
@@ -95,16 +95,7 @@ def training_routine(rank, cfg):
     # if cfg.model.name is not defined then create a new name:
     name = cfg.model["name"] if "name" in cfg.model else None
     if name: model_name = f"{name}.pth"
-    else:
-        model_name = (
-            f"model_n{cfg.data.dataset.size}"
-            f"_support{cfg.data.dataset.support_size}"
-            f"_ep{cfg.training.num_epochs}"
-            f"_dec_units_{cfg.model.decoder.units}"
-            f"_nlayers_{cfg.model.decoder.num_transformer_layers}"
-            f"_nheads_{cfg.model.decoder.num_attention_heads}"
-            f"_drop_{cfg.model.decoder.dropout}"
-        )
+    else: model_name = utils.get_model_name_from_cfg(cfg)
 
     # Set default directory if not provided
     os.makedirs(cfg.model.save_path, exist_ok=True)
@@ -115,11 +106,11 @@ def training_routine(rank, cfg):
     logger.info(f"Auto-generated model name: {model_name}")
     logger.info(f"Model will be saved to: {full_save_path}")
 
-    # Loading training dataset and loader
+    # Loading training DATASET and loader
     logger.info("Loading dataset: " + cfg.data.hf_dataset)
     train_loader, len_train_data = prepare_dataset(cfg)
 
-    logger.info(f"train_size={len_train_data}, training.batch_size={cfg.training.batch_size}, "
+    logger.info(f"train_size={len_train_data}, training.batch_size={cfg.training.batch_size_per_device}, "
                 f"batches_per_epoch={len(train_loader)}")
 
     # Create encoder model
@@ -156,7 +147,7 @@ def training_routine(rank, cfg):
     pytorch_model = DDP(pytorch_model, device_ids=[rank])
     # the core model is now accessible as pytorch_model.module
 
-    optimizer = optim.Adam(pytorch_model.parameters(), lr=5e-5)
+    optimizer = optim.Adam(pytorch_model.parameters(), lr=cfg.training.learning_rate * torch.cuda.device_count())
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
 
     # Print total model parameters
@@ -171,10 +162,14 @@ def training_routine(rank, cfg):
 
     logger.info("Starting training loop")
     pytorch_model.train()
+    
+    # Create a single progress bar for all epochs
+    total_batches = cfg.training.num_epochs * len(train_loader)
+    pbar = tqdm(total=total_batches, desc="Training")
+    
     for epoch in range(cfg.training.num_epochs):
         train_loader.sampler.set_epoch(epoch)
-        pbar = tqdm(train_loader, total=len(train_loader))
-        for batch in pbar:
+        for batch in train_loader:
 
             # encoder side
             encoder_input_ab = batch[OT_INPUT_TOTAL]
@@ -211,7 +206,10 @@ def training_routine(rank, cfg):
             loss.backward()
             optimizer.step()
 
-            pbar.set_description(f"Epoch: {epoch+1}, Batch Loss: {loss.item():.5}")
+            pbar.set_description(f"Epoch: {epoch+1}/{cfg.training.num_epochs}, Loss: {loss.item():.5f}")
+            pbar.update(1)
+    
+    pbar.close()
 
     # Save the trained model and vocabulary (only on main process)
     ddp_barrier()
@@ -263,9 +261,6 @@ def main(cfg: DictConfig):
     if cfg.training.world_size is None: cfg.training.world_size = torch.cuda.device_count()
 
     mp.spawn(training_routine, args=(cfg, ), nprocs=cfg.training.world_size)
-
-    #TODO: logger.info(f"Starting distributed training with {cfg.training.world_size} GPUs")
-    # For GPU training, run directly without multiprocessing
 
 if __name__ == "__main__":
     main()

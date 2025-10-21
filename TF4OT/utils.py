@@ -94,3 +94,15 @@ def sparse_mse(A: sparse.coo_matrix, B: sparse.coo_matrix) -> float:
         return 0.0
     
     return float(sq_norm) / nnz
+
+def get_model_name_from_cfg(cfg):
+    return (
+            f"model_data{cfg.data.dataset.size_s}"
+            f"_prec{cfg.tokenizer.DigitTokenizer.decimal_precision}"
+            f"_support{cfg.data.dataset.support_size}"
+            f"_ep{cfg.training.num_epochs}"
+            f"_dec_units_{cfg.model.decoder.units}"
+            f"_nlayers_{cfg.model.decoder.num_transformer_layers}"
+            f"_nheads_{cfg.model.decoder.num_attention_heads}"
+            f"_drop_{cfg.model.decoder.dropout}"
+        )    

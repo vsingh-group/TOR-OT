@@ -99,19 +99,19 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
         # Compute OT plans once per dataset
 
         # Sparse plan
-        otplan_emd_sparse = ot.emd_1d(
-            xs, xt,
-            source_dist[i], target_dist[i], dense=False
-        )
+        # otplan_emd_sparse = ot.emd_1d(
+        #     xs, xt,
+        #     source_dist[i], target_dist[i], dense=False
+        # )
         otplan_solve_sparse = ot.solve(
             C, a=source_dist[i], b=target_dist[i]
         ).sparse_plan
 
         # Dense plan
-        otplan_emd_dense = ot.emd_1d(
-            xs, xt,
-            source_dist[i], target_dist[i], dense=True
-        )
+        # otplan_emd_dense = ot.emd_1d(
+        #     xs, xt,
+        #     source_dist[i], target_dist[i], dense=True
+        # )
         otplan_solve_dense = ot.solve(
             C, a=source_dist[i], b=target_dist[i]
         ).plan
@@ -137,8 +137,8 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
                     'input_cost_matrix':  C.tolist(),
                     'input_idx':    input_idx,
                     'input_total':  input_total.tolist(),
-                    'target_otplan_emd_sparse':   coo_tolist(otplan_emd_sparse, j),
-                    'target_otplan_emd_dense':    otplan_emd_dense[j].tolist(),
+                    #'target_otplan_emd_sparse':   coo_tolist(otplan_emd_sparse, j),
+                    #'target_otplan_emd_dense':    otplan_emd_dense[j].tolist(),
                     'target_otplan_solve_dense':  otplan_solve_dense[j].tolist(),
                     'target_otplan_solve_sparse': coo_tolist(otplan_solve_sparse, j)
                 }
@@ -152,8 +152,8 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
                 'target_dist':  target_tensor.tolist(),
                 'input_cost_matrix':  C.tolist(),
                 'input_total':  input_total.tolist(),
-                'target_otplan_emd_sparse':   coo_tolist(otplan_emd_sparse, None),
-                'target_otplan_emd_dense':    otplan_emd_dense.tolist(),
+                #'target_otplan_emd_sparse':   coo_tolist(otplan_emd_sparse, None),
+                #'target_otplan_emd_dense':    otplan_emd_dense.tolist(),
                 'target_otplan_solve_dense':  otplan_solve_dense.tolist(),
                 'target_otplan_solve_sparse': coo_tolist(otplan_solve_sparse, None)
             }

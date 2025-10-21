@@ -22,7 +22,7 @@ python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --cost_fix
 ### Run training (runs on gpu)
 ```console
 CUDA_VISIBLE_DEVICES=7 python3 -m TF4OT.run_training --config-name test_row_wise
-CUDA_VISIBLE_DEVICES=4,5,6,7 python3 -m TF4OT.run_training --config-name test_row_wise
+CUDA_VISIBLE_DEVICES=2,5,6,7 python3 -m TF4OT.run_training --config-name TF_100K
 ```
 
 ### Run inference

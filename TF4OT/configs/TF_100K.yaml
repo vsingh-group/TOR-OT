@@ -13,15 +13,14 @@ defaults:
 # Override specific parameters
 
 data:
-  #data_dir:    "./experiments/singletarget/data/n_10k/support_10"
-  hf_dataset:     "ivanjaenm/ot-dataset_bins10_size100k_prec3"
+  hf_dataset:     "ivanjaenm/otdata_100K_rowwise"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   dataset:
-    size:         100_000
+    size_n:           100_000
+    size_s:           '100K'
     support_size:     10
     input_total_dim:  21        # 2*support_size+1 -> row-wise
-    input_cost_matrix_dim: 100 # support_size*support_size
-    num_targets:      10
+    input_cost_matrix_dim: 100  # support_size*support_size
   loading:
     num_workers:      20
 
@@ -29,34 +28,45 @@ model:
   save_path:      "./experiments/trained_models"
   encoder:
     support_size: ${data.dataset.support_size}
+    #MLP encoder
     input_dim:    ${data.dataset.feature_dim}   # <-- link to feature_dim
     output_dim:   128
+    #TF encoder
     emb_dim:      128
   decoder:
     emb_dim:                128
-    seq_dim:                1500
+    seq_dim:                500
     units:                  256
     num_transformer_layers: 4
     num_attention_heads:    4
     dropout:                0
 
 training:
-  num_epochs:     100
-  batch_size:     512
+  num_epochs:     10
+  batch_size_per_device:     128
   learning_rate:  1e-4
   use_amp:        true
   grad_accumulation: 1
   world_size:       null #null will use all gpus. 0 will use cpu
   device:           cuda #null will use cuda if available, otherwise cpu
 
+# Main tokenizer used during training/inference
 tokenizer:
-  num_exponent_digits: 2
-  num_mantissa_digits: 10
+  active: "DigitTokenizer"
+  DigitTokenizer:
+    decimal_precision: 4
+    vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']
+  IEEEFloatTokenizer:
+    base: 10
+    num_exponent_digits: 2
+    num_mantissa_digits: 10
 
 inference:
   out_dir:      "./experiments/results"
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}
-  batch_size:   64
+  batch_size:   ${data.dataset.support_size}
   threshold:    50
+  test_all_testset: false           # Set to true to test all testset examples
+  test_custom_distributions: true  # Set to true to run distribution pair tests

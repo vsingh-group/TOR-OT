@@ -123,6 +123,7 @@ class TokenRegressor(nn.Module):
     @torch.no_grad()
     def generate(self,
             encoder_input_ab,
+            encoder_input_C=None,
             temperature: float = 1.0,
             top_k: int | None = None,
             top_p: float | None = None,
@@ -154,12 +155,12 @@ class TokenRegressor(nn.Module):
                 current_logits = np.where(current_logits < thresholds, NEG_INF, current_logits)
 
             if top_p is not None:
-                
+
                 probs = sp.special.softmax(current_logits / temperature, axis=-1)
                 sorted_probs = np.sort(probs, axis=-1)[:, ::-1]
                 cumulative_probs = np.cumsum(sorted_probs, axis=-1)
                 cutoff_indices = np.argmax(cumulative_probs > top_p, axis=-1)
-                
+
                 for batch_idx in range(B):
                     sorted_indices = np.argsort(current_logits[batch_idx, :])
                     top_k_indices = sorted_indices[: -cutoff_indices[batch_idx]]

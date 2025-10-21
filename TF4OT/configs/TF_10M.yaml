@@ -13,10 +13,11 @@ defaults:
 # Override specific parameters
 
 data:
-  hf_dataset:     "ivanjaenm/ot_dataset_row_test"
+  hf_dataset:     "ivanjaenm/otdata_10M_rowwise"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   dataset:
-    size:             100_000
+    size_n:           10_000_000
+    size_s:           '10M'
     support_size:     10
     input_total_dim:  21        # 2*support_size+1 -> row-wise
     input_cost_matrix_dim: 100 # support_size*support_size
@@ -41,7 +42,7 @@ model:
     dropout:                0
 
 training:
-  num_epochs:     100
+  num_epochs:     10
   batch_size_per_device:     128
   learning_rate:  1e-4
   use_amp:        true
@@ -50,19 +51,21 @@ training:
   device:           cuda #null will use cuda if available, otherwise cpu
 
 tokenizer:
+  active: "DigitTokenizer"
   DigitTokenizer:
-    decimal_precision: 8
+    decimal_precision: 4
     vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']
-  # IEEEFloatTokenizer:
-  #   base:                10
-  #   num_exponent_digits: 2
-  #   num_mantissa_digits: 10
+  IEEEFloatTokenizer:
+    base: 10
+    num_exponent_digits: 2
+    num_mantissa_digits: 10  
 
 inference:
   out_dir:      "./experiments/results"
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}
-  batch_size:   128
+  batch_size:   ${data.dataset.support_size}
   threshold:    50
-  test_distributions: true  # Set to true to run distribution pair tests
+  test_all_testset: true           # Set to true to test all testset examples
+  test_custom_distributions: true  # Set to true to run distribution pair tests

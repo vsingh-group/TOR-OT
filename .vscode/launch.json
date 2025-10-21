@@ -32,10 +32,10 @@
                 "CUDA_VISIBLE_DEVICES": "7"
             },
             "args": [
-                "--config-name", "test_row_wise"
+                "--config-name", "TF_100K"
                 //"--config-name", "test"
             ]
-        },        
+        },
         {
             "name": "Debug TF4OT-Data",
             "type": "debugpy",
