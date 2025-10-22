@@ -13,10 +13,10 @@ pip3 install -r requirements.txt
 ### Run data generator (runs on cpu)
 ```console
 python3 -m TF4OT.run_datagenerator --config-name small
-python3 -m TF4OT.run_datagenerator --n_bins=10 --row_wise --metric='sqeuclidean' --cost_fixed=True  --dataset_size=10_000_000 --output_dir=./_ot_dataset_row_test_10M --upload --repo_name='ivanjaenm/ot_row_wise_10M'
-python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --cost_fixed=True  --dataset_size=100_000 --output_dir=./ot_dataset_test --upload --repo_name='ivanjaenm/ot_dataset_test'
-python3 -m TF4OT.run_datagenerator --n_bins=10 --row_wise --metric='sqeuclidean' --cost_fixed=False --dataset_size=100_000 --output_dir=./ot_dataset_cost_row_test --upload --repo_name='ivanjaenm/ot_dataset_cost_row_test'
-python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --cost_fixed=False --dataset_size=100_000 --output_dir=./ot_dataset_cost_test --upload --repo_name='ivanjaenm/ot_dataset_cost_test'
+python3 -m TF4OT.run_datagenerator --n_bins=10 --row_wise --metric='sqeuclidean' --cost_fixed  --dataset_size=100_000 --output_dir=./_otdata_100K_rowwise --upload --repo_name='ivanjaenm/otdata_100K_rowwise'
+python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --cost_fixed  --dataset_size=100_000 --output_dir=./_otdata_100K --upload --repo_name='ivanjaenm/otdata_100K'
+python3 -m TF4OT.run_datagenerator --n_bins=10 --row_wise --metric='sqeuclidean' --dataset_size=100_000 --output_dir=./_otdata_100K_rowwise_variableC --upload --repo_name='ivanjaenm/otdata_100K_rowwise_variableC'
+python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --dataset_size=100_000 --output_dir=./_otdata_100K_variableC --upload --repo_name='ivanjaenm/otdata_100K_variableC'
 ```
 
 ### Run training (runs on gpu)

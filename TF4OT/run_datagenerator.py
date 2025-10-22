@@ -89,7 +89,6 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
 
     print("Computing optimal transport maps and yielding samples...")
     for i in tqdm(range(dataset_size), desc="Processing datasets"):
-
         # Variable cost matrix case
         if not cost_fixed:
             x_low  = 10; x_high = 0
@@ -335,7 +334,7 @@ def main():
     parser.add_argument("--row_wise", action="store_true", help="Store output plan matrix row by row?")
     parser.add_argument("--output_dir", type=str, default="./ot_dataset", help="Output directory for dataset")
     parser.add_argument("--metric", type=str, default="sqeuclidean", help="Distance metric")
-    parser.add_argument("--cost_fixed", type=bool, default=True, help="Is the cost matrix C, fixed?")
+    parser.add_argument("--cost_fixed", action="store_true", help="Is the cost matrix C, fixed?")
     parser.add_argument("--device", type=str, default="cpu", help="Device to use (cpu/cuda)")
     parser.add_argument("--test_split", type=float, default=0.2, help="Test split ratio")
     parser.add_argument("--random_split", action="store_true", help="Use random split instead of consecutive rows")
