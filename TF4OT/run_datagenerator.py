@@ -80,16 +80,9 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
     target_dist /= target_dist.sum(axis=1, keepdims=True)
 
     # Define support points
-    if cost_fixed:
-        # fixed C case
-        xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
-        xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
-    else:
-        # variable C case
-        x_low  = 10
-        x_high = 0
-        xs = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
-        xt = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
+    # Fixed cost matrix case
+    xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
+    xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
     # Define cost matrix
     C = ot.dist(xs, xt, metric=metric)
     C /= C.max()
@@ -97,7 +90,13 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
     print("Computing optimal transport maps and yielding samples...")
     for i in tqdm(range(dataset_size), desc="Processing datasets"):
 
-        # Compute OT plans once per dataset
+        # Variable cost matrix case
+        if not cost_fixed:
+            x_low  = 10; x_high = 0
+            xs = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
+            xt = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
+            C = ot.dist(xs, xt, metric=metric)
+            C /= C.max()
 
         # Sparse plan
         # otplan_emd_sparse = ot.emd_1d(
