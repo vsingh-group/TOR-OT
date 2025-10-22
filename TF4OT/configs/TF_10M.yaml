@@ -42,7 +42,7 @@ model:
     dropout:                0
 
 training:
-  num_epochs:     10
+  num_epochs:     30
   batch_size_per_device:     128
   learning_rate:  1e-4
   use_amp:        true
@@ -58,7 +58,7 @@ tokenizer:
   IEEEFloatTokenizer:
     base: 10
     num_exponent_digits: 2
-    num_mantissa_digits: 10  
+    num_mantissa_digits: 10
 
 inference:
   out_dir:      "./experiments/results"
@@ -67,5 +67,5 @@ inference:
   use_amp:      ${training.use_amp}
   batch_size:   ${data.dataset.support_size}
   threshold:    50
-  test_all_testset: true           # Set to true to test all testset examples
+  test_all_testset: false           # Set to true to test all testset examples
   test_custom_distributions: true  # Set to true to run distribution pair tests

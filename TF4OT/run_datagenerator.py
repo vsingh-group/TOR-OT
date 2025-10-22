@@ -6,7 +6,6 @@ This script generates synthetic data for learning optimal transport mappings bet
 probability distributions using sparse matrix representations.
 """
 
-#import numpy as np
 import ot
 import json
 import torch
@@ -87,8 +86,10 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
         xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
     else:
         # variable C case
-        xs = np.random.uniform(low=[-1, -1],high=[1, 1], size=(n_bins, 2))
-        xt = np.random.uniform(low=[1, 1],  high=[3, 3], size=(n_bins, 2))
+        x_low  = 10
+        x_high = 0
+        xs = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
+        xt = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
     # Define cost matrix
     C = ot.dist(xs, xt, metric=metric)
     C /= C.max()

@@ -4,7 +4,6 @@ hf_cache_dir: ''
 
 # Dataset parameters
 dataset:
-  size: 100
   support_size: 10  # Support size of the distributions
   feature_dim: 21  # Dimension of input features
   target_dim: 1  # Dimension of target values

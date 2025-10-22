@@ -105,7 +105,7 @@ def inference_routine(cfg):
         total_batches = min(10, len(test_loader))
 
     pytorch_model.eval()
-    
+
     # Initialize lists to collect metrics and figures
     all_mse_dense = []
     all_mse_sparse = []

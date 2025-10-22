@@ -66,5 +66,5 @@ inference:
   use_amp:      ${training.use_amp}
   batch_size:   ${data.dataset.support_size}
   threshold:    50
-  test_all_testset: true           # Set to true to test all testset examples
+  test_all_testset: false           # Set to true to test all testset examples
   test_custom_distributions: true  # Set to true to run distribution pair tests
