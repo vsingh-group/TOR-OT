@@ -255,9 +255,9 @@ def inference_routine(cfg):
             
             # Update progress bar with current metrics
             pbar.set_postfix({
-                'mse_dense': f'{mse_diff_dense:.6f}',
-                'mse_sparse': f'{mse_diff_sparse:.6f}',
-                'otcost_diff': f'{otcost_diff:.6f}'
+                'mse_dense': f'{mse_diff_dense:.6e}',
+                'mse_sparse': f'{mse_diff_sparse:.6e}',
+                'otcost_diff': f'{otcost_diff:.6e}'
             })
     
     # Convert to numpy arrays for statistics
@@ -281,19 +281,19 @@ def inference_routine(cfg):
     # logger.info("")
     
     logger.info("MSE Diff (sparse):")
-    logger.info(f"  Mean:   {all_mse_sparse.mean():.6f}")
-    logger.info(f"  Median: {np.median(all_mse_sparse):.6f}")
-    logger.info(f"  Min:    {all_mse_sparse.min():.6f}")
-    logger.info(f"  Max:    {all_mse_sparse.max():.6f}")
-    logger.info(f"  Std:    {all_mse_sparse.std():.6f}")
+    logger.info(f"  Mean:   {all_mse_sparse.mean():.6e}")
+    logger.info(f"  Median: {np.median(all_mse_sparse):.6e}")
+    logger.info(f"  Min:    {all_mse_sparse.min():.6e}")
+    logger.info(f"  Max:    {all_mse_sparse.max():.6e}")
+    logger.info(f"  Std:    {all_mse_sparse.std():.6e}")
     logger.info("")
     
     logger.info("OT Cost Difference:")
-    logger.info(f"  Mean:   {all_otcost_diff.mean():.6f}")
-    logger.info(f"  Median: {np.median(all_otcost_diff):.6f}")
-    logger.info(f"  Min:    {all_otcost_diff.min():.6f}")
-    logger.info(f"  Max:    {all_otcost_diff.max():.6f}")
-    logger.info(f"  Std:    {all_otcost_diff.std():.6f}")
+    logger.info(f"  Mean:   {all_otcost_diff.mean():.6e}")
+    logger.info(f"  Median: {np.median(all_otcost_diff):.6e}")
+    logger.info(f"  Min:    {all_otcost_diff.min():.6e}")
+    logger.info(f"  Max:    {all_otcost_diff.max():.6e}")
+    logger.info(f"  Std:    {all_otcost_diff.std():.6e}")
     logger.info("="*80 + "\n")
     
     # Prepare summary table data
@@ -417,14 +417,10 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
     yaml_config_path = full_save_path + ".yaml"
     
     if os.path.exists(yaml_config_path):
-        with open(yaml_config_path) as f:
-            cfg = yaml.safe_load(f)
+        cfg = OmegaConf.load(yaml_config_path)
+        cfg = OmegaConf.to_container(cfg, resolve=True)
     else:
         raise FileNotFoundError(f"No config file found at {yaml_config_path}")
-
-    # Extract dimensions from new automatic config structure
-    input_total_dim       = cfg["data"]["dataset"]["input_total_dim"]
-    input_cost_matrix_dim = cfg["data"]["dataset"]["input_cost_matrix_dim"]
 
     # Rebuild tokenizer from config
     tokenizer_cfg = cfg["tokenizer"]["DigitTokenizer"]
@@ -446,26 +442,31 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
         raise ValueError("Unknown tokenizer configuration")
 
     # Rebuild encoder
-    emb_dim = cfg["model"]["encoder"]["emb_dim"]
+    input_dim = cfg["model"]["encoder"]["encoder_ab"]["input_dim"]
+    emb_dim   = cfg["model"]["encoder"]["encoder_ab"]["emb_dim"]
     encoder_ab = nn.Sequential(
-        nn.Linear(input_total_dim, emb_dim),
+        nn.Linear(input_dim, emb_dim),
         nn.GELU(),
         nn.Linear(emb_dim, emb_dim)
     ).to(device)
 
-    # Note: encoder_C is commented out in training, so we don't create it during loading
-    # encoder_C = nn.Sequential(
-    #     nn.Linear(input_cost_matrix_dim, emb_dim),
-    #     nn.GELU(),
-    #     nn.Linear(emb_dim, emb_dim)
-    # ).to(device)
+    # Check if encoder_C exists in the config
+    encoder_C = None
+    if "encoder_C" in cfg["model"]["encoder"]:
+        input_dim = cfg["model"]["encoder"]["encoder_C"]["input_dim"]
+        emb_dim   = cfg["model"]["encoder"]["encoder_C"]["emb_dim"]
+        encoder_C = nn.Sequential(
+            nn.Linear(input_dim, emb_dim),
+            nn.GELU(),
+            nn.Linear(emb_dim, emb_dim)
+        ).to(device)
 
     # Rebuild model using decoder config
     decoder_cfg = cfg["model"]["decoder"]
     pytorch_model = model.TokenRegressor(
         tokenizer   = tokenizer,
         encoder_ab  = encoder_ab,
-        encoder_C   = None,  # Match training setup: encoder_C was None
+        encoder_C   = encoder_C,
         emb_dim     = decoder_cfg["emb_dim"],
         seq_dim     = decoder_cfg["seq_dim"],
         num_transformer_layers = decoder_cfg["num_transformer_layers"],
@@ -819,7 +820,8 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
     n_samples   = 1_000_000
     n_bins      = cfg.data.dataset.support_size
     metric      = 'sqeuclidean'
-    cost_fixed  = True
+    # check encoder C in config
+    cost_fixed  = not "encoder_C" in cfg["model"]["encoder"]
     row_wise    = True
 
     # Evaluate distribution pairs
@@ -837,9 +839,10 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
             xs = np.arange(n_bins, dtype=np.float32)[:, None]
             xt = np.arange(n_bins, dtype=np.float32)[:, None]
         else:
-            # variable C case
-            xs = np.random.uniform(low=[-1, -1],high=[1, 1], size=(n_bins, 2))
-            xt = np.random.uniform(low=[1, 1],  high=[3, 3], size=(n_bins, 2))
+            x_low  = 0; x_high = 10
+            xs = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
+            xt = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
+
         # Define cost matrix
         C = ot.dist(xs, xt, metric=metric)
         C /= C.max()
@@ -872,12 +875,18 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
                 target_tensor
             )).to(my_dtype_torch)
 
+        if cost_fixed:
+            encoder_input_C = None
+        else:
+            encoder_input_C  = torch.tensor(C, dtype=my_dtype_torch)
+            encoder_input_C  = encoder_input_C.to(device)
+
         encoder_input_ab = torch.stack(encoder_input_ab).to(device)
 
         # Run model INFERENCE
         text_ids_pred = pytorch_model.generate(
             encoder_input_ab=encoder_input_ab,
-            encoder_input_C=None,
+            encoder_input_C= encoder_input_C,
             temperature=0.1,
             max_seq_len=cfg.model.decoder.seq_dim
         )
@@ -953,7 +962,7 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         axarr[2].set_xlabel("Target bins")
         axarr[2].set_ylabel("Source bins")
         plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
-        
+
         # --- Model Prediction ---
         im3 = axarr[3].imshow(ot_plan_pred, cmap='Reds', vmin=vmin, vmax=vmax, 
                              origin='lower', aspect="auto")
@@ -991,7 +1000,7 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
             'target': Y_sampler.name,
             'idx': idx
         })
-    
+
     # Prepare summary table data
     table_data = []
     for r in all_results:
@@ -1001,9 +1010,9 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
             f"{r['OT Cost diff']:.3e}",
             f"{r['MSE diff sparse']:.3e}"
         ])
-    
+
     headers = ['Source', 'Target', 'OT Cost Diff', 'MSE Diff (dense)', 'MSE Diff (sparse)']
-    
+
     # Print summary table to terminal
     logger.info("\n" + "="*80)
     logger.info("SUMMARY OF RESULTS")
@@ -1084,7 +1093,6 @@ def main(cfg: DictConfig):
 
     # Set world_size if not specified
     if cfg.training.world_size is None: cfg.training.world_size = torch.cuda.device_count()
-
 
     # Regular inference routine
     logger.info("Running standard inference routine")

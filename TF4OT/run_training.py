@@ -113,30 +113,44 @@ def training_routine(rank, cfg):
     logger.info(f"train_size={len_train_data}, training.batch_size={cfg.training.batch_size_per_device}, "
                 f"batches_per_epoch={len(train_loader)}")
 
-    # Create encoder model
-    logger.info("Creating Encoder")
-    encoder_ab = nn.Sequential(nn.Linear(cfg.data.dataset.input_total_dim, cfg.model.encoder.emb_dim),
-                               nn.GELU(),
-                               nn.Linear(cfg.model.encoder.emb_dim, cfg.model.encoder.emb_dim)
-                               ).to(device)
-    # encoder_C = nn.Sequential(nn.Linear(cfg.data.dataset.input_cost_matrix_dim, cfg.model.encoder.emb_dim),
-    #                           nn.GELU(),
-    #                           nn.Linear(cfg.model.encoder.emb_dim, cfg.model.encoder.emb_dim)
-    #                           ).to(device)
+    # Create encoders
+    logger.info("Creating Encoders")
+    use_encoder_ab = getattr(cfg.model.encoder, "encoder_ab", None)
+    use_encoder_C  = getattr(cfg.model.encoder, "encoder_C", None)
+
+    encoder_ab = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_ab.input_dim, 
+                                             cfg.model.encoder.encoder_ab.emb_dim), 
+                                             nn.GELU(),
+                                             nn.Linear(cfg.model.encoder.encoder_ab.emb_dim, cfg.model.encoder.encoder_ab.emb_dim)
+                                            ).to(device)
+    if use_encoder_C:
+        encoder_C = nn.Sequential(nn.Linear(cfg.data.dataset.input_cost_matrix_dim,
+                                            cfg.model.encoder.encoder_C.emb_dim),
+                                            nn.GELU(),
+                                            nn.Linear(cfg.model.encoder.encoder_C.emb_dim, cfg.model.encoder.encoder_C.emb_dim)
+                                            ).to(device)
 
     # Create Tokenizer
     logger.info("Creating Tokenizer")
-    tokenizer = tokenizers.MyDigitTokenizer(vocabulary=cfg.tokenizer.DigitTokenizer.vocabulary,
-                                            decimal_precision=cfg.tokenizer.DigitTokenizer.decimal_precision)
-    # tokenizer = tokenizers.IEEEFloatTokenizer(base=cfg.tokenizer.base,
-    #                                            num_exponent_digits=cfg.tokenizer.num_exponent_digits,
-    #                                            num_mantissa_digits=cfg.tokenizer.num_mantissa_digits)
+    if hasattr(cfg.tokenizer, "DigitTokenizer"):
+        params = cfg.tokenizer.DigitTokenizer
+        tokenizer = tokenizers.MyDigitTokenizer(
+            vocabulary=params.vocabulary,
+            decimal_precision=params.decimal_precision
+        )
+    elif hasattr(cfg.tokenizer, "IEEEFloatTokenizer"):
+        params = cfg.tokenizer.IEEEFloatTokenizer
+        tokenizer = tokenizers.IEEEFloatTokenizer(
+            base=params.base,
+            num_exponent_digits=params.num_exponent_digits,
+            num_mantissa_digits=params.num_mantissa_digits
+        )
 
     # Create Transformer Model
     logger.info("Creating Transformer Model")
     pytorch_model = model.TokenRegressor(tokenizer,
                                          encoder_ab=encoder_ab,
-                                         encoder_C=None,
+                                         encoder_C=None if not use_encoder_C else encoder_C,
                                          emb_dim=cfg.model.decoder.emb_dim,
                                          seq_dim=cfg.model.decoder.seq_dim,
                                          num_transformer_layers=cfg.model.decoder.num_transformer_layers,
@@ -162,7 +176,7 @@ def training_routine(rank, cfg):
 
     logger.info("Starting training loop")
     pytorch_model.train()
-    
+
     # Create a single progress bar for all epochs
     total_batches = cfg.training.num_epochs * len(train_loader)
     pbar = tqdm(total=total_batches, desc="Training")
@@ -175,9 +189,10 @@ def training_routine(rank, cfg):
             encoder_input_ab = batch[OT_INPUT_TOTAL]
             encoder_input_ab = encoder_input_ab.to(device)
 
-            # encoder_input_C  = batch[OT_INPUT_COST_MATRIX]
-            # encoder_input_C_flat = encoder_input_C.flatten(start_dim=1)
-            # encoder_input_C_flat = encoder_input_C_flat.to(device)
+            if use_encoder_C:
+                encoder_input_C  = batch[OT_INPUT_COST_MATRIX]
+                encoder_input_C_flat = encoder_input_C.flatten(start_dim=1)
+                encoder_input_C_flat = encoder_input_C_flat.to(device)
 
             # tokenizer side (assumes your tokenizer.encode returns torch tensors)
             text_input, pad_mask = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=True)
@@ -198,7 +213,7 @@ def training_routine(rank, cfg):
 
             text_pred = pytorch_model.forward(encoder_input_ab,
                                               text_input,
-                                              encoder_input_C=None,
+                                              encoder_input_C=None if not use_encoder_C else encoder_input_C_flat,
                                               pad_mask=pad_mask)
             loss = criterion(text_pred.permute(0, 2, 1), text_target)
 

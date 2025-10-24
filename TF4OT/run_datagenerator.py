@@ -91,7 +91,7 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
     for i in tqdm(range(dataset_size), desc="Processing datasets"):
         # Variable cost matrix case
         if not cost_fixed:
-            x_low  = 10; x_high = 0
+            x_low  = 0; x_high = 10
             xs = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
             xt = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
             C = ot.dist(xs, xt, metric=metric)

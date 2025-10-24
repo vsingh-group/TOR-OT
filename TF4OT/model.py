@@ -22,7 +22,7 @@ class TokenRegressor(nn.Module):
                  num_transformer_layers: int = 1,
                  num_attention_heads:    int = 1,
                  dropout: float = 0.0):
-    
+
         super().__init__()
 
         self.tokenizer  = tokenizer
@@ -79,7 +79,7 @@ class TokenRegressor(nn.Module):
         """
 
         # 1) prefix = encode "x" 
-        prefix_ab = self.encoder_ab(encoder_input_ab)      
+        prefix_ab = self.encoder_ab(encoder_input_ab)
         prefix_ab = prefix_ab.unsqueeze(1)
 
         if encoder_input_C is not None:

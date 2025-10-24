@@ -32,7 +32,7 @@
                 "CUDA_VISIBLE_DEVICES": "7"
             },
             "args": [
-                "--config-name", "TF_100K"
+                "--config-name", "TF_100K_cost_fixed"
                 //"--config-name", "test"
             ]
         },
