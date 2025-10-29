@@ -4,7 +4,7 @@
 # Override the defaults
 defaults:
   - data:       default
-  - model:      small
+  - model:      tiny
   - training:   default
   - tokenizer:  default
   - logging:    default
@@ -48,7 +48,7 @@ model:
   #   dropout:                0
 
 training:
-  num_epochs:            10
+  num_epochs:            20
   batch_size_per_device: 128
   learning_rate:         1e-6
   use_amp:               false
