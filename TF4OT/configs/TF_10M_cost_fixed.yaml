@@ -22,29 +22,30 @@ data:
     input_total_dim:       21   # 2*support_size+1 -> row-wise
     input_cost_matrix_dim: 100  # support_size*support_size
     row_wise:              true
+    cost_fixed:            true
   loading:
     num_workers:           20
 
 model:
   save_path:      "./experiments/trained_models/cost_fixed"
-  encoder:
-  # encoder for distributions source:a and target:b
-    encoder_ab: 
-      #MLP encoder
-      input_dim:    ${data.dataset.input_total_dim}
-      emb_dim:      128
-  # encoder for cost matrix
-    # encoder_C:
-    #   #TF encoder
-    #   input_dim:    ${data.dataset.input_cost_matrix_dim}   # <-- link to feature_dim
-    #   emb_dim:      128
-  decoder:
-    emb_dim:                128
-    seq_dim:                500
-    units:                  256
-    num_transformer_layers: 4
-    num_attention_heads:    4
-    dropout:                0
+  # encoder:
+  # # encoder for distributions source:a and target:b
+  #   encoder_ab: 
+  #     #MLP encoder
+  #     input_dim:    ${data.dataset.input_total_dim}
+  #     emb_dim:      128
+  # # encoder for cost matrix
+  #   # encoder_C:
+  #   #   #TF encoder
+  #   #   input_dim:    ${data.dataset.input_cost_matrix_dim}   # <-- link to feature_dim
+  #   #   emb_dim:      128
+  # decoder:
+  #   emb_dim:                128
+  #   seq_dim:                512
+  #   units:                  256
+  #   num_transformer_layers: 4
+  #   num_attention_heads:    4
+  #   dropout:                0
 
 training:
   num_epochs:            10
@@ -56,7 +57,6 @@ training:
   device:                cuda #null will use cuda if available, otherwise cpu
 
 tokenizer:
-  active: "DigitTokenizer"
   DigitTokenizer:
     decimal_precision: 4
     vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']

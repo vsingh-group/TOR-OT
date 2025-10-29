@@ -594,7 +594,7 @@ class MyDigitTokenizer:
         self.vocabulary = vocabulary
         self.size = len(vocabulary)
         self.decimal_precision = decimal_precision
-        self.pad_id = self.size
+        #self.pad_id = self.size
         self.vocabulary_mapping = {v: i for i, v in enumerate(vocabulary)}
         self.ids_mapping = {i: v for v, i in self.vocabulary_mapping.items()}
 
@@ -629,6 +629,7 @@ class MyDigitTokenizer:
         return token_ids, mask
 
     def from_tokens(self, token_ids):
+        token_ids = np.array(token_ids.cpu().numpy())
         texts = [''.join([self.ids_mapping.get(t, '') for t in tokens]) for tokens in token_ids]
 
         return texts

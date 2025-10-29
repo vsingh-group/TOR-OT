@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 import scipy as sp
+import torch.nn.functional as F
+
 
 NEG_INF = float('-inf')
 
@@ -16,9 +18,11 @@ class TokenRegressor(nn.Module):
     def __init__(self,
                  tokenizer,
                  encoder_ab: nn.Module,
-                 encoder_C: nn.Module = None,
-                 emb_dim: int = 128,
-                 seq_dim: int = 1024,
+                 encoder_c: nn.Module = None,
+                 emb_dim_ab: int = 128,
+                 emb_dim_c: int = 128,
+                 emb_dim_d: int = 128,
+                 max_seq_len: int = 1024,
                  num_transformer_layers: int = 1,
                  num_attention_heads:    int = 1,
                  dropout: float = 0.0):
@@ -27,20 +31,23 @@ class TokenRegressor(nn.Module):
 
         self.tokenizer  = tokenizer
         self.encoder_ab = encoder_ab
-        self.encoder_C  = encoder_C
-        self.emb_dim    = emb_dim
+        self.encoder_c  = encoder_c
+        self.emb_dim_ab = emb_dim_ab
+        self.emb_dim_c  = emb_dim_c
+        self.emb_dim_d  = emb_dim_d
+        self.max_seq_len= max_seq_len
         self.num_transformer_layers = num_transformer_layers
         self.num_attention_heads    = num_attention_heads
         self.dropout = dropout
 
-        # token + positional embeddings
-        self.token_emb = nn.Embedding(self.tokenizer.vocab_size, self.emb_dim, padding_idx=tokenizer.pad_id)
-        self.pos_emb   = nn.Embedding(seq_dim, self.emb_dim)
+        # token + positional embeddings))
+        self.token_emb = nn.Embedding(self.tokenizer.vocab_size, self.emb_dim_d)#, padding_idx=tokenizer.pad_id)
+        self.pos_emb   = nn.Embedding(self.max_seq_len, self.emb_dim_d)           # sequence dimension
         # projection layer to align concatenated prefix back to embedding dimension
-        if encoder_C is not None:
-            self.prefix_proj = nn.Linear(2 * self.emb_dim, self.emb_dim)
+        if encoder_c is not None:
+            self.prefix_proj = nn.Linear(self.emb_dim_ab + self.emb_dim_c, self.emb_dim_d)
         else:
-            self.prefix_proj = None
+            self.prefix_proj = nn.Linear(self.emb_dim_ab, self.emb_dim_d)
 
         # stacked transformer blocks
         self.transformer_layers = nn.ModuleList()
@@ -48,26 +55,31 @@ class TokenRegressor(nn.Module):
 
             # batch_first=True makes the layer expect (B, L, D) shaped inputs (batch, seq, feature).
             attn = nn.MultiheadAttention(num_heads=self.num_attention_heads,
-                                         embed_dim=self.emb_dim,
+                                         embed_dim=self.emb_dim_d,
                                          dropout=self.dropout,
                                          batch_first=True)
 
-            ffn = nn.Sequential(nn.Linear(self.emb_dim, self.emb_dim),
-                                nn.ReLU(),
-                                nn.Linear(self.emb_dim, self.emb_dim))
+            ffn = nn.Sequential(nn.Linear(self.emb_dim_d, 4*self.emb_dim_d),
+                                nn.GELU(),
+                                nn.Linear(4*self.emb_dim_d, self.emb_dim_d))
 
-            layernorm1 = nn.LayerNorm(self.emb_dim, eps=1e-6)
-            layernorm2 = nn.LayerNorm(self.emb_dim, eps=1e-6)
+            layernorm1 = nn.LayerNorm(self.emb_dim_d, eps=1e-6)
+            layernorm2 = nn.LayerNorm(self.emb_dim_d, eps=1e-6)
 
             self.transformer_layers.append(nn.ModuleList([attn, ffn, layernorm1, layernorm2]))
 
         # final projection → vocab logits
-        self.out_proj = nn.Linear(self.emb_dim, self.tokenizer.vocab_size)
+        self.out_proj = nn.Linear(self.emb_dim_d, self.tokenizer.vocab_size)
+
+        # KV cache
+        #self.window_size = self.max_seq_len
+        #self.register_buffer("cache_k", None, persistent=False)
+        #self.register_buffer("cache_v", None, persistent=False)
 
     def forward(self,
                 encoder_input_ab,
                 decoded_ids,
-                encoder_input_C=None,
+                encoder_input_c=None,
                 pad_mask=None):
         """
         Returns probabilities over the next token.
@@ -82,22 +94,23 @@ class TokenRegressor(nn.Module):
         prefix_ab = self.encoder_ab(encoder_input_ab)
         prefix_ab = prefix_ab.unsqueeze(1)
 
-        if encoder_input_C is not None:
-            prefix_C = self.encoder_C(encoder_input_C)
-            prefix_C = prefix_C.unsqueeze(1)
+        if encoder_input_c is not None:
+            prefix_c = self.encoder_c(encoder_input_c)
+            prefix_c = prefix_c.unsqueeze(1)
             # concat prefix_ab and prefix_C along feature dim -> [B, 1, 2*units]
-            prefix = torch.cat([prefix_ab, prefix_C], dim=2)
-            # Project back to embedding dimension -> [B, 1, emb_dim]
-            prefix = self.prefix_proj(prefix)
+            prefix = torch.cat([prefix_ab, prefix_c], dim=2)
+
         else:
             prefix = prefix_ab  # [B, 1, units]
+        # Project back to embedding dimension -> [B, 1, emb_dim_d]
+        prefix = self.prefix_proj(prefix)
+
         # 2) embed decoder inputs
         decoded = self.token_emb(decoded_ids)      # [B, L-1, units]
         seq = torch.cat([prefix, decoded], dim=1)  # [B, L, units], L = L-1+1
 
         # 3) add positional embeddings
         L = seq.size(1)
-        #print("L: ", L)
         positions = torch.arange(start=0, end=L, step=1, device=seq.device)
         pos_embeddings = self.pos_emb(positions).unsqueeze(0)   # [1, L, units]
         seq = seq + pos_embeddings                              # broadcast→[B,L,units]
@@ -123,30 +136,35 @@ class TokenRegressor(nn.Module):
     @torch.no_grad()
     def generate(self,
             encoder_input_ab,
-            encoder_input_C=None,
+            encoder_input_c=None,
             temperature: float = 1.0,
             top_k: int | None = None,
-            top_p: float | None = None,
-            max_seq_len: int = 2500):
+            top_p: float | None = None
+        ):
 
-        B = encoder_input_ab.shape[0]
-        token_ids = -1 * np.ones((B, max_seq_len), dtype=int)
-
+        batch_size = encoder_input_ab.shape[0]
+        # pre-allocate output token ids
+        #token_ids = -1 * np.ones((batch_size, self.max_seq_len), dtype=int)
+        token_ids = torch.full(
+            size=(batch_size, self.max_seq_len),
+            fill_value=-1,
+            dtype=torch.long,
+            device=encoder_input_ab.device
+       )
         print("Starting generation...")
-        for i in range(max_seq_len):
-            print (f"Generating token {i+1}/{max_seq_len}", end='\r')
-            tensor_slice = torch.from_numpy(token_ids[:, :i]).to(device=encoder_input_ab[0].device, dtype=torch.long)
+        for i in range(self.max_seq_len):
+            print (f"Generating token {i+1}/{self.max_seq_len}", end='\r')
+            # tokens generated so far
+            tensor_slice = token_ids[:, :i]
+            #tensor_slice = torch.from_numpy(token_ids[:, :i]).to(device=encoder_input_ab[0].device, dtype=torch.long)
             logits = self.forward(encoder_input_ab,
                                   tensor_slice,
-                                  encoder_input_C=None,
-                                  pad_mask=None)       # [B, i+1, V], torch.Tensor
+                                  encoder_input_c=encoder_input_c,
+                                  pad_mask=None)       # [B, i+1, V], torch.Tensor (B: batch size, i+1: sequence length, V: vocabulary size)
             current_logits = logits[:, -1, :]          # [B, V], torch.Tensor
 
-            logits = logits.detach().cpu().numpy()          # shape [B, i+1, V]
-            current_logits = current_logits.detach().cpu().numpy()  # shape [B, V]
-
-            # Logit restriction: mask invalid tokens (create mask as torch.bool on the correct device)
-            # current_logits[:, ~self._vocab.logit_mask(i)] = NEG_INF
+            #logits = logits.detach().cpu().numpy()          # shape [B, i+1, V]
+            #current_logits = current_logits.detach().cpu().numpy()  # shape [B, V]
 
             # Apply top-k and top-p filtering
             if top_k is not None:
@@ -161,16 +179,21 @@ class TokenRegressor(nn.Module):
                 cumulative_probs = np.cumsum(sorted_probs, axis=-1)
                 cutoff_indices = np.argmax(cumulative_probs > top_p, axis=-1)
 
-                for batch_idx in range(B):
+                for batch_idx in range(batch_size):
                     sorted_indices = np.argsort(current_logits[batch_idx, :])
                     top_k_indices = sorted_indices[: -cutoff_indices[batch_idx]]
                     current_logits[batch_idx, top_k_indices] = NEG_INF
 
             # [B, V]
-            probs = sp.special.softmax(current_logits / temperature, axis=-1)
+            #probs = sp.special.softmax(current_logits / temperature, axis=-1)
+            probs = F.softmax(current_logits / temperature, dim=-1)
+
 
             # Sample tokens.
-            sampled_ids = vectorized_sample(probs)
-            token_ids[:, i] = np.array(sampled_ids)
+            next_token = torch.multinomial(probs, num_samples=1).squeeze(1)  # [B]
+            token_ids[:, i] = next_token
+
+            # sampled_ids = vectorized_sample(probs)
+            # token_ids[:, i] = np.array(sampled_ids)
 
         return token_ids

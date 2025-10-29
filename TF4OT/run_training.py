@@ -32,9 +32,9 @@ logger = logging.getLogger(__name__)
 
 from torch.utils.data._utils.collate import default_collate
 
-def ddp_setup(rank, world_size): 
+def ddp_setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12345" 
+    os.environ["MASTER_PORT"] = "12345"
     torch.cuda.set_device(rank)
     dist.init_process_group( backend="nccl", rank=rank, world_size=world_size)
 
@@ -77,6 +77,11 @@ def training_routine(rank, cfg):
         cfg: Hydra configuration object
         model_save_path: Directory where to save the trained model (if None, uses default directory)
     """
+    os.environ["HF_HOME"]            = cfg.data.hf_cache_dir
+    os.environ["HF_DATASETS_CACHE"]  = cfg.data.hf_cache_dir
+    os.environ["TRANSFORMERS_CACHE"] = cfg.data.hf_cache_dir
+    os.environ["HF_METRICS_CACHE"]   = cfg.data.hf_cache_dir
+
     ddp_setup(rank, cfg.training.world_size)
 
     logging.basicConfig(level=logging.INFO,
@@ -115,20 +120,17 @@ def training_routine(rank, cfg):
 
     # Create encoders
     logger.info("Creating Encoders")
-    use_encoder_ab = getattr(cfg.model.encoder, "encoder_ab", None)
-    use_encoder_C  = getattr(cfg.model.encoder, "encoder_C", None)
 
-    encoder_ab = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_ab.input_dim, 
-                                             cfg.model.encoder.encoder_ab.emb_dim), 
-                                             nn.GELU(),
-                                             nn.Linear(cfg.model.encoder.encoder_ab.emb_dim, cfg.model.encoder.encoder_ab.emb_dim)
-                                            ).to(device)
-    if use_encoder_C:
-        encoder_C = nn.Sequential(nn.Linear(cfg.data.dataset.input_cost_matrix_dim,
-                                            cfg.model.encoder.encoder_C.emb_dim),
-                                            nn.GELU(),
-                                            nn.Linear(cfg.model.encoder.encoder_C.emb_dim, cfg.model.encoder.encoder_C.emb_dim)
-                                            ).to(device)
+    encoder_ab = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_ab.input_dim, cfg.model.encoder.encoder_ab.emb_dim_ab),
+                                nn.GELU(),
+                                nn.Linear(cfg.model.encoder.encoder_ab.emb_dim_ab, cfg.model.encoder.encoder_ab.emb_dim_ab)
+                                ).to(device)
+    if not cfg.data.dataset.cost_fixed:
+        encoder_c = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_c.input_dim, cfg.model.encoder.encoder_c.emb_dim_c),
+                                    nn.GELU(),
+                                    nn.Linear(cfg.model.encoder.encoder_c.emb_dim_c, cfg.model.encoder.encoder_c.emb_dim_c)
+                                    ).to(device)
+    else: encoder_c = None
 
     # Create Tokenizer
     logger.info("Creating Tokenizer")
@@ -150,9 +152,11 @@ def training_routine(rank, cfg):
     logger.info("Creating Transformer Model")
     pytorch_model = model.TokenRegressor(tokenizer,
                                          encoder_ab=encoder_ab,
-                                         encoder_C=None if not use_encoder_C else encoder_C,
-                                         emb_dim=cfg.model.decoder.emb_dim,
-                                         seq_dim=cfg.model.decoder.seq_dim,
+                                         encoder_c=encoder_c,
+                                         emb_dim_ab=cfg.model.encoder.encoder_ab.emb_dim_ab,
+                                         emb_dim_c=cfg.model.encoder.encoder_c.emb_dim_c,
+                                         emb_dim_d=cfg.model.decoder.emb_dim_d,
+                                         max_seq_len=cfg.model.decoder.max_seq_len,
                                          num_transformer_layers=cfg.model.decoder.num_transformer_layers,
                                          num_attention_heads=cfg.model.decoder.num_attention_heads,
                                          dropout=cfg.model.decoder.dropout
@@ -161,13 +165,14 @@ def training_routine(rank, cfg):
     pytorch_model = DDP(pytorch_model, device_ids=[rank])
     # the core model is now accessible as pytorch_model.module
 
-    optimizer = optim.Adam(pytorch_model.parameters(), lr=cfg.training.learning_rate * torch.cuda.device_count())
+    lr = cfg.training.learning_rate * torch.cuda.device_count()
+    logger.info(f"Creating Optimizer with lr: {lr:.2e}")
+    optimizer = optim.Adam(pytorch_model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss(ignore_index=-100)
 
     # Print total model parameters
-    model_total_params = sum(p.numel() for p in pytorch_model.parameters())
     model_total_params_trainable = sum(p.numel() for p in pytorch_model.parameters() if p.requires_grad)
-    logger.info(f"Total model parameters: {model_total_params}")
+    logger.info(f"Total model parameters: {model_total_params_trainable}")
 
     # Main training loop
     OT_INPUT_TOTAL        = "input_total"
@@ -180,19 +185,17 @@ def training_routine(rank, cfg):
     # Create a single progress bar for all epochs
     total_batches = cfg.training.num_epochs * len(train_loader)
     pbar = tqdm(total=total_batches, desc="Training")
-    
+
     for epoch in range(cfg.training.num_epochs):
         train_loader.sampler.set_epoch(epoch)
         for batch in train_loader:
 
             # encoder side
-            encoder_input_ab = batch[OT_INPUT_TOTAL]
-            encoder_input_ab = encoder_input_ab.to(device)
+            encoder_input_ab = batch[OT_INPUT_TOTAL].to(device)
 
-            if use_encoder_C:
-                encoder_input_C  = batch[OT_INPUT_COST_MATRIX]
-                encoder_input_C_flat = encoder_input_C.flatten(start_dim=1)
-                encoder_input_C_flat = encoder_input_C_flat.to(device)
+            if not cfg.data.dataset.cost_fixed:
+                encoder_input_c      = batch[OT_INPUT_COST_MATRIX].flatten(start_dim=1).to(device)
+                encoder_input_c_flat = encoder_input_c.flatten(start_dim=1).to(device)
 
             # tokenizer side (assumes your tokenizer.encode returns torch tensors)
             text_input, pad_mask = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=True)
@@ -205,7 +208,7 @@ def training_routine(rank, cfg):
             #text_input_from_tokens  = tokenizer.from_tokens(text_input)
 
             # ignore PAD in targets
-            text_target[text_target == tokenizer.pad_id] = -100
+            text_target[text_target == tokenizer.size] = -100
 
             text_input  = text_input.to(device)
             pad_mask    = pad_mask.to(device)
@@ -213,7 +216,7 @@ def training_routine(rank, cfg):
 
             text_pred = pytorch_model.forward(encoder_input_ab,
                                               text_input,
-                                              encoder_input_C=None if not use_encoder_C else encoder_input_C_flat,
+                                              encoder_input_c=None if cfg.data.dataset.cost_fixed else encoder_input_c_flat,
                                               pad_mask=pad_mask)
             loss = criterion(text_pred.permute(0, 2, 1), text_target)
 
@@ -223,7 +226,7 @@ def training_routine(rank, cfg):
 
             pbar.set_description(f"Epoch: {epoch+1}/{cfg.training.num_epochs}, Loss: {loss.item():.5f}")
             pbar.update(1)
-    
+
     pbar.close()
 
     # Save the trained model and vocabulary (only on main process)
@@ -248,7 +251,8 @@ def training_routine(rank, cfg):
         # (Optional) report param counts robustly even when encoder_C is None
         decoder_total_params = sum(p.numel() for p in state_dict.values())
         encoder_total_params = sum(p.numel() for p in encoder_ab.parameters() if p.requires_grad)
-        logger.info(f"Total trainable parameters (encoder + decoder): {decoder_total_params + encoder_total_params}")
+        total_params = decoder_total_params + encoder_total_params
+        logger.info( "Total trainable parameters (encoder + decoder): {:,d} ({:.2f}M)".format(total_params, total_params / 1e6))
         logger.info(f"Total size on disk: {os.path.getsize(model_full_path) / (1024 * 1024):.2f} MB")
         logger.info(f"Training completed and model saved!: {model_full_path}")
     ddp_barrier()

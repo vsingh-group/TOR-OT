@@ -4,14 +4,13 @@
 # Override the defaults
 defaults:
   - data:       default
-  - model:      default
+  - model:      tiny
   - training:   default
   - tokenizer:  default
   - logging:    default
   - _self_
 
 # Override specific parameters
-
 data:
   hf_dataset:     "ivanjaenm/otdata_100K_rowwise_cost_fixed"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
@@ -22,29 +21,30 @@ data:
     input_total_dim:       21   # 2*support_size+1 -> row-wise
     input_cost_matrix_dim: 100  # support_size*support_size
     row_wise:              true
+    cost_fixed:            true
   loading:
     num_workers:           20
 
 model:
   save_path:      "./experiments/trained_models/cost_fixed"
-  encoder:
-  # encoder for distributions source:a and target:b
-    encoder_ab:
-      #MLP encoder
-      input_dim:    ${data.dataset.input_total_dim}   # <-- link to feature_dim
-      emb_dim:      128
-  # encoder for cost matrix
-    # encoder_C:
-    #   #TF encoder
-    #   input_dim:    ${data.dataset.input_cost_matrix_dim}   # <-- link to feature_dim
-    #   emb_dim:      128
-  decoder:
-    emb_dim:                128
-    seq_dim:                500
-    units:                  256
-    num_transformer_layers: 4
-    num_attention_heads:    4
-    dropout:                0
+#   encoder:
+#   # encoder for distributions source:a and target:b
+#     encoder_ab:
+#       #MLP encoder
+#       input_dim:    ${data.dataset.input_total_dim}   # <-- link to feature_dim
+#       emb_dim:      128
+#   # encoder for cost matrix
+#     # encoder_C:
+#     #   #TF encoder
+#     #   input_dim:    ${data.dataset.input_cost_matrix_dim}   # <-- link to feature_dim
+#     #   emb_dim:      128
+#   decoder:
+#     emb_dim:                128
+#     seq_dim:                500
+#     units:                  256
+#     num_transformer_layers: 4
+#     num_attention_heads:    4
+#     dropout:                0
 
 training:
   num_epochs:            10
@@ -57,10 +57,11 @@ training:
 
 # Main tokenizer used during training/inference
 tokenizer:
-  active: "DigitTokenizer"
+  # option1: DigitTokenizer
   DigitTokenizer:
     decimal_precision: 4
     vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']
+  # option2: IEEEFloatTokenizer
   # IEEEFloatTokenizer:
   #   base: 10
   #   num_exponent_digits: 2
@@ -72,6 +73,5 @@ inference:
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}
   batch_size:   ${data.dataset.support_size}
-  threshold:    50
   test_all_testset: false           # Set to true to test all testset examples
   test_custom_distributions: true   # Set to true to run distribution pair tests

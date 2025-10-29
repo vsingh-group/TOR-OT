@@ -59,10 +59,10 @@ def inference_routine(cfg):
 
     # Combine directory with auto-generated filename
     full_save_path = os.path.join(cfg.model.save_path, model_name)
-
     logger.info(f"Auto-generated model name: {model_name}")
-    logger.info(f"Model will be loaded from: {full_save_path}")
-
+    
+    # Loading MODEL
+    logger.info(f"Loading model from: {full_save_path}")
     pytorch_model, tokenizer = load_model_by_name(full_save_path)
 
     # Loading TEST dataset
@@ -117,17 +117,21 @@ def inference_routine(cfg):
     import matplotlib.pyplot as plt
     
     n_bins = cfg.data.dataset.support_size
-    
+    cost_fixed  = cfg.data.dataset.cost_fixed
+
     with torch.no_grad():
         pbar = tqdm(test_batches, total=total_batches)
         for batch_idx, batch in enumerate(pbar):
 
             # Run model INFERENCE
             encoder_input_ab = batch[OT_INPUT_TOTAL].to(device)
+            if cost_fixed:
+                encoder_input_c = None
+            else:
+                encoder_input_c = batch[OT_INPUT_COST_MATRIX].flatten(start_dim=1).to(device)
             text_ids_pred = pytorch_model.generate(encoder_input_ab=encoder_input_ab,
-                                                   encoder_input_C=None,
-                                                   temperature=0.1,
-                                                   max_seq_len=cfg.model.decoder.seq_dim)
+                                                   encoder_input_c=encoder_input_c, 
+                                                   temperature=0.1)
             text_pred = tokenizer.from_tokens(text_ids_pred)
             text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
 
@@ -411,9 +415,8 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
 
     Returns: (model, tokenizer)
     """
+
     model_full_path  = full_save_path + ".pth"
-    
-    # Check for both .yaml and .json config files
     yaml_config_path = full_save_path + ".yaml"
     
     if os.path.exists(yaml_config_path):
@@ -442,36 +445,41 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
         raise ValueError("Unknown tokenizer configuration")
 
     # Rebuild encoder
-    input_dim = cfg["model"]["encoder"]["encoder_ab"]["input_dim"]
-    emb_dim   = cfg["model"]["encoder"]["encoder_ab"]["emb_dim"]
+    input_dim  = cfg["model"]["encoder"]["encoder_ab"]["input_dim"]
+    emb_dim_ab = cfg["model"]["encoder"]["encoder_ab"]["emb_dim_ab"]
     encoder_ab = nn.Sequential(
-        nn.Linear(input_dim, emb_dim),
+        nn.Linear(input_dim, emb_dim_ab),
         nn.GELU(),
-        nn.Linear(emb_dim, emb_dim)
+        nn.Linear(emb_dim_ab, emb_dim_ab)
     ).to(device)
 
     # Check if encoder_C exists in the config
-    encoder_C = None
-    if "encoder_C" in cfg["model"]["encoder"]:
-        input_dim = cfg["model"]["encoder"]["encoder_C"]["input_dim"]
-        emb_dim   = cfg["model"]["encoder"]["encoder_C"]["emb_dim"]
-        encoder_C = nn.Sequential(
-            nn.Linear(input_dim, emb_dim),
+    
+    if cfg["data"]["dataset"]["cost_fixed"]:
+        encoder_c = None
+        emb_dim_c = 0
+    else:
+        input_dim = cfg["model"]["encoder"]["encoder_c"]["input_dim"]
+        emb_dim_c = cfg["model"]["encoder"]["encoder_c"]["emb_dim_c"]
+        encoder_c = nn.Sequential(
+            nn.Linear(input_dim, emb_dim_c),
             nn.GELU(),
-            nn.Linear(emb_dim, emb_dim)
+            nn.Linear(emb_dim_c, emb_dim_c)
         ).to(device)
 
     # Rebuild model using decoder config
-    decoder_cfg = cfg["model"]["decoder"]
-    pytorch_model = model.TokenRegressor(
+    decoder_cfg     = cfg["model"]["decoder"]
+    pytorch_model   = model.TokenRegressor(
         tokenizer   = tokenizer,
         encoder_ab  = encoder_ab,
-        encoder_C   = encoder_C,
-        emb_dim     = decoder_cfg["emb_dim"],
-        seq_dim     = decoder_cfg["seq_dim"],
+        encoder_c   = encoder_c,
+        emb_dim_ab  = emb_dim_ab,
+        emb_dim_c   = emb_dim_c,
+        emb_dim_d   = decoder_cfg["emb_dim_d"],
+        max_seq_len = decoder_cfg["max_seq_len"],
         num_transformer_layers = decoder_cfg["num_transformer_layers"],
         num_attention_heads    = decoder_cfg["num_attention_heads"],
-        dropout     = decoder_cfg.get("dropout", 0.1)  # Use default if not present
+        dropout     = decoder_cfg.get("dropout", 0.0)  # Use default if not present
     ).to(device)
 
     # Load weights
@@ -812,8 +820,6 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
     # Load the pre-trained model if not provided
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    logger.info("Using pre-loaded model (skipping model loading)")
-
     # Collect results across trials
     all_results = []
     all_figures = []  # Store figures for notebook
@@ -821,8 +827,8 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
     n_bins      = cfg.data.dataset.support_size
     metric      = 'sqeuclidean'
     # check encoder C in config
-    cost_fixed  = not "encoder_C" in cfg["model"]["encoder"]
-    row_wise    = True
+    cost_fixed  = cfg.data.dataset.cost_fixed
+    row_wise    = cfg.data.dataset.row_wise
 
     # Evaluate distribution pairs
     for idx, (X_sampler, Y_sampler) in enumerate(sampler_pairs_with_reciprocals):
@@ -861,36 +867,45 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         # Yield individual bin samples
         if row_wise:
             encoder_input_ab = []
+            encoder_input_c  = []
             for j in range(n_bins):
                 input_idx = [j / n_bins]
                 input_total = torch.hstack((
                     source_tensor,
                     target_tensor,
                     torch.tensor(input_idx, dtype=my_dtype_torch)
-                )).to(my_dtype_torch)
+                )).to(my_dtype_torch)                
                 encoder_input_ab.append(input_total)
-        else:
-            encoder_input_ab = torch.hstack((
-                source_tensor,
-                target_tensor
-            )).to(my_dtype_torch)
 
+                if not cost_fixed:
+                    encoder_input_c.append(torch.tensor(C, dtype=my_dtype_torch).flatten(start_dim=0))
+
+        # else:
+        #     encoder_input_ab = torch.hstack((
+        #         source_tensor,
+        #         target_tensor
+        #     )).to(my_dtype_torch)
+
+        #     if cost_fixed:
+        #         encoder_input_C = None
+        #     else:
+        #         encoder_input_C  = torch.tensor(C, dtype=my_dtype_torch)
+        #         encoder_input_C  = encoder_input_C.flatten(start_dim=0).to(device)
+
+        encoder_input_ab    = torch.stack(encoder_input_ab).to(device)
         if cost_fixed:
-            encoder_input_C = None
+            encoder_input_c = None
         else:
-            encoder_input_C  = torch.tensor(C, dtype=my_dtype_torch)
-            encoder_input_C  = encoder_input_C.to(device)
-
-        encoder_input_ab = torch.stack(encoder_input_ab).to(device)
+            encoder_input_c = torch.stack(encoder_input_c).to(device)
 
         # Run model INFERENCE
         text_ids_pred = pytorch_model.generate(
             encoder_input_ab=encoder_input_ab,
-            encoder_input_C= encoder_input_C,
-            temperature=0.1,
-            max_seq_len=cfg.model.decoder.seq_dim
+            encoder_input_c= encoder_input_c,
+            temperature=0.1
         )
         text_pred = tokenizer.from_tokens(text_ids_pred)
+        print( "idx: ", idx, "text_pred: ", text_pred)
         text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
 
         text_pred_dense = [sparse_row_string_to_dense_string(t, n_bins, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]

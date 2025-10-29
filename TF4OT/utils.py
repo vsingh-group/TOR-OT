@@ -97,14 +97,16 @@ def sparse_mse(A: sparse.coo_matrix, B: sparse.coo_matrix) -> float:
 
 def get_model_name_from_cfg(cfg):
     return (
-            f"model_data{cfg.data.dataset.size_s}"
+            f"model_dim{cfg.model.decoder.emb_dim_d}"
+            f"_context{cfg.model.decoder.max_seq_len}"
+            f"_tflayers{cfg.model.decoder.num_transformer_layers}"
+            f"_tfheads{cfg.model.decoder.num_attention_heads}"
+            f"_dropout{cfg.model.decoder.dropout}"
+            f"_data{cfg.data.dataset.size_s}"
             f"{'_rowwise' if cfg.data.dataset.row_wise else ''}"
+            f"{'_costfixed' if cfg.data.dataset.cost_fixed else ''}"
             f"_prec{cfg.tokenizer.DigitTokenizer.decimal_precision}"
             f"_bins{cfg.data.dataset.support_size}"
             f"_{'DigitTokenizer' if hasattr(cfg.tokenizer, 'DigitTokenizer') else 'IEEEFloatTokenizer'}"
-            f"_dec_units_{cfg.model.decoder.units}"
-            f"_tflayers_{cfg.model.decoder.num_transformer_layers}"
-            f"_tfheads_{cfg.model.decoder.num_attention_heads}"
-            f"_drop_{cfg.model.decoder.dropout}"
             f"_epochs{cfg.training.num_epochs}"
-        )    
+    )
