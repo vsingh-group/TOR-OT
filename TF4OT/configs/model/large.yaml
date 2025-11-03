@@ -14,6 +14,6 @@ encoder:
 decoder:
   emb_dim_d:              768
   max_seq_len:            1024
-  num_transformer_layers: 12
-  num_attention_heads:    12
+  num_transformer_layers: 24
+  num_attention_heads:    16
   dropout:                0

@@ -182,19 +182,20 @@ def training_routine(rank, cfg):
     logger.info("Starting training loop")
     pytorch_model.train()
 
-    # Create a single progress bar for all epochs
-    total_batches = cfg.training.num_epochs * len(train_loader)
-    pbar = tqdm(total=total_batches, desc="Training")
+    # One-line progress per epoch
+    pbar = tqdm(total=cfg.training.num_epochs, desc="Training", unit="epoch")
 
     for epoch in range(cfg.training.num_epochs):
         train_loader.sampler.set_epoch(epoch)
+        running_loss = 0.0
+        n_batches    = 0
         for batch in train_loader:
 
             # encoder side
             encoder_input_ab = batch[OT_INPUT_TOTAL].to(device)
 
             if not cfg.data.dataset.cost_fixed:
-                encoder_input_c      = batch[OT_INPUT_COST_MATRIX].flatten(start_dim=1).to(device)
+                encoder_input_c      = batch[OT_INPUT_COST_MATRIX]
                 encoder_input_c_flat = encoder_input_c.flatten(start_dim=1).to(device)
 
             # tokenizer side (assumes your tokenizer.encode returns torch tensors)
@@ -224,8 +225,13 @@ def training_routine(rank, cfg):
             loss.backward()
             optimizer.step()
 
-            pbar.set_description(f"Epoch: {epoch+1}/{cfg.training.num_epochs}, Loss: {loss.item():.5f}")
-            pbar.update(1)
+            running_loss += loss.item()
+            n_batches += 1
+        
+        avg_loss = running_loss / max(1, n_batches)
+        pbar.set_description(f"Epoch {epoch+1}/{cfg.training.num_epochs}")
+        pbar.set_postfix(avg_loss=f"{avg_loss:.5f}")
+        pbar.update(1)
 
     pbar.close()
 
