@@ -1,0 +1,29 @@
+# HTC Submit File using GPU resources
+JobBatchName = "decoding-based-ot-$(experiment)"
+
+universe        = container
+container_image = docker://ivanjaenm/decoding-based-ot:1.1
+
+transfer_input_files    = ./
+preserve_relative_paths = true
+should_transfer_files   = YES
+
+# Logging
+stream_output  = false
+stream_error   = false
+output         = condor/logs/$(experiment)-$(Cluster)_output-$(Process).txt
+error          = condor/logs/$(experiment)-$(Cluster)_error-$(Process).txt
+log            = condor/logs/$(experiment)-$(Cluster)_log-$(Process).txt
+
+staging_dir  = /staging/jaenmarquez
+environment  = "MPLCONFIGDIR=$(staging_dir)/.config/matplotlib WANDB_CACHE_DIR=$(staging_dir)/.config/wandb"
+
+request_cpus   = 1
+request_memory = 10GB
+request_disk   = 5GB
+
+executable = condor/scripts/run_experiment_datagenerator.sh
+arguments  = $(experiment) \
+             $(request_cpus) \
+             $(Cluster)
+queue 1
