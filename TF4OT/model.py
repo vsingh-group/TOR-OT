@@ -7,10 +7,6 @@ import torch.nn.functional as F
 
 NEG_INF = float('-inf')
 
-def sample_from_probs(prob_vector):
-  return np.random.choice(range(len(prob_vector)), p=prob_vector)
-vectorized_sample = np.vectorize(sample_from_probs, signature='(n)->()')
-
 class TokenRegressor(nn.Module):
     """
       Transformer-based model for token regression.
@@ -188,6 +184,190 @@ class TokenRegressor(nn.Module):
             #probs = sp.special.softmax(current_logits / temperature, axis=-1)
             probs = F.softmax(current_logits / temperature, dim=-1)
 
+            # Sample tokens.
+            next_token = torch.multinomial(probs, num_samples=1).squeeze(1)  # [B]
+            token_ids[:, i] = next_token
+
+            # sampled_ids = vectorized_sample(probs)
+            # token_ids[:, i] = np.array(sampled_ids)
+
+        return token_ids
+
+
+class TokenRegressor_two_prefix_tokens(nn.Module):
+    """
+      Transformer-based model for token regression with two prefix tokens.
+    """
+    def __init__(self,
+                 tokenizer,
+                 encoder_ab:    nn.Module,
+                 encoder_c:     nn.Module = None,
+                 emb_dim_ab:    int = 128,
+                 emb_dim_c:     int = 128,
+                 emb_dim_d:     int = 128,
+                 max_seq_len:   int = 1024,
+                 num_transformer_layers: int = 1,
+                 num_attention_heads:    int = 1,
+                 dropout: float = 0.0):
+
+        super().__init__()
+
+        self.tokenizer  = tokenizer
+        self.encoder_ab = encoder_ab
+        self.encoder_c  = encoder_c
+        self.emb_dim_ab = emb_dim_ab
+        self.emb_dim_c  = emb_dim_c
+        self.emb_dim_d  = emb_dim_d
+        self.max_seq_len= max_seq_len
+        self.num_transformer_layers = num_transformer_layers
+        self.num_attention_heads    = num_attention_heads
+        self.dropout = dropout
+
+        # token + positional embeddings))
+        self.token_emb = nn.Embedding(self.tokenizer.vocab_size, self.emb_dim_d)#, padding_idx=tokenizer.pad_id)
+        self.pos_emb   = nn.Embedding(self.max_seq_len, self.emb_dim_d)           # sequence dimension
+        # projection layer to align concatenated prefix back to embedding dimension
+        # if encoder_c is not None:
+        #     self.prefix_proj = nn.Linear(self.emb_dim_ab + self.emb_dim_c, self.emb_dim_d)
+        # else:
+        #     self.prefix_proj = nn.Linear(self.emb_dim_ab, self.emb_dim_d)
+
+        # stacked transformer blocks
+        self.transformer_layers = nn.ModuleList()
+        for _ in range(self.num_transformer_layers):
+
+            # batch_first=True makes the layer expect (B, L, D) shaped inputs (batch, seq, feature).
+            attn = nn.MultiheadAttention(num_heads=self.num_attention_heads,
+                                         embed_dim=self.emb_dim_d,
+                                         dropout=self.dropout,
+                                         batch_first=True)
+
+            ffn = nn.Sequential(nn.Linear(self.emb_dim_d, 4*self.emb_dim_d),
+                                nn.GELU(),
+                                nn.Linear(4*self.emb_dim_d, self.emb_dim_d))
+
+            layernorm1 = nn.LayerNorm(self.emb_dim_d, eps=1e-6)
+            layernorm2 = nn.LayerNorm(self.emb_dim_d, eps=1e-6)
+
+            self.transformer_layers.append(nn.ModuleList([attn, ffn, layernorm1, layernorm2]))
+
+        # final projection → vocab logits
+        self.out_proj = nn.Linear(self.emb_dim_d, self.tokenizer.vocab_size)
+
+        # KV cache
+        #self.window_size = self.max_seq_len
+        #self.register_buffer("cache_k", None, persistent=False)
+        #self.register_buffer("cache_v", None, persistent=False)
+
+    def forward(self,
+                encoder_input_ab,
+                decoded_ids,
+                encoder_input_c=None,
+                pad_mask=None):
+        """
+        Returns probabilities over the next token.
+
+        X=encoder_input (Batch, Feature): [B, F]
+        Y=decoded_ids (Batch, Sequence Length) : [B, L-1]  (all but last token)
+        units (int): hidden dimension
+        returns logits over the vocabulary (Batch, Sequence Length, Vocabulary Size): [B, L, V]
+        """
+        decoded = self.token_emb(decoded_ids)      # [B, L-1, units]
+
+        # 1) prefix = encode "x" 
+        prefix_ab = self.encoder_ab(encoder_input_ab)
+        prefix_ab = prefix_ab.unsqueeze(1)
+
+        if encoder_input_c is not None:
+            prefix_c = self.encoder_c(encoder_input_c)
+            prefix_c = prefix_c.unsqueeze(1)
+            # sequence: two prefixes + decoded tokens
+            # 2) concat prefix_ab and prefix_c along feature dim -> [B, 1, emb_dim_d]
+            seq = torch.cat([prefix_ab, prefix_c, decoded], dim=1)  # [B, L+1, emb_dim_d], L+1 = 2 + L-1
+
+        else:
+            # 2) concat prefix_ab and decoded along feature dim -> [B, L, units], L = L-1+1
+            seq = torch.cat([prefix_ab, decoded], dim=1)  # [B, L, units], L = L-1+1
+
+
+        # 3) add positional embeddings
+        L = seq.size(1)
+        positions      = torch.arange(start=0, end=L, step=1, device=seq.device)
+        pos_embeddings = self.pos_emb(positions).unsqueeze(0)   # [1, L, units]
+        seq = seq + pos_embeddings                              # broadcast→[B,L,units]
+
+        # 4) Create causal mask for self-attention.
+        #    transformer stack with causal mask
+        #    mask shape: [L, L], True = masked
+        causal_mask = torch.triu(torch.ones(L, L, device=seq.device), diagonal=1).bool()
+
+        # Apply transformer layers.
+        for attn, ffn, layernorm1, layernorm2 in self.transformer_layers:
+            # PyTorch MHA returns (output, weights). We only need the output.
+            # It expects query, key, value, and an optional attention mask.
+            attn_out, _ = attn(seq, seq, seq, attn_mask=causal_mask, need_weights=False, key_padding_mask=pad_mask)
+            seq = layernorm1(seq + attn_out) # Add & Norm
+            ffn_out = ffn(seq)
+            seq = layernorm2(seq + ffn_out) # Add & Norm
+
+        # 5) project to vocab logits
+        logits = self.out_proj(seq)  # [B, L, V]
+        return logits
+
+    @torch.no_grad()
+    def generate(self,
+            encoder_input_ab,
+            encoder_input_c=None,
+            temperature: float = 1.0,
+            top_k: int | None = None,
+            top_p: float | None = None
+        ):
+
+        batch_size = encoder_input_ab.shape[0]
+        # pre-allocate output token ids
+        #token_ids = -1 * np.ones((batch_size, self.max_seq_len), dtype=int)
+        token_ids = torch.full(
+            size=(batch_size, self.max_seq_len),
+            fill_value=-1,
+            dtype=torch.long,
+            device=encoder_input_ab.device
+       )
+        print("Starting generation...")
+        for i in range(self.max_seq_len):
+            print (f"Generating token {i+1}/{self.max_seq_len}", end='\r')
+            # tokens generated so far
+            tensor_slice = token_ids[:, :i]
+            #tensor_slice = torch.from_numpy(token_ids[:, :i]).to(device=encoder_input_ab[0].device, dtype=torch.long)
+            logits = self.forward(encoder_input_ab,
+                                  tensor_slice,
+                                  encoder_input_c=encoder_input_c,
+                                  pad_mask=None)       # [B, i+1, V], torch.Tensor (B: batch size, i+1: sequence length, V: vocabulary size)
+            current_logits = logits[:, -1, :]          # [B, V], torch.Tensor
+
+            #logits = logits.detach().cpu().numpy()          # shape [B, i+1, V]
+            #current_logits = current_logits.detach().cpu().numpy()  # shape [B, V]
+
+            # Apply top-k and top-p filtering
+            if top_k is not None:
+                top_k = min(top_k, current_logits.shape[-1])  # prevent index errors
+                thresholds = np.sort(current_logits, axis=-1)[:, -top_k][:, np.newaxis]
+                current_logits = np.where(current_logits < thresholds, NEG_INF, current_logits)
+
+            if top_p is not None:
+
+                probs = sp.special.softmax(current_logits / temperature, axis=-1)
+                sorted_probs = np.sort(probs, axis=-1)[:, ::-1]
+                cumulative_probs = np.cumsum(sorted_probs, axis=-1)
+                cutoff_indices = np.argmax(cumulative_probs > top_p, axis=-1)
+
+                for batch_idx in range(batch_size):
+                    sorted_indices = np.argsort(current_logits[batch_idx, :])
+                    top_k_indices = sorted_indices[: -cutoff_indices[batch_idx]]
+                    current_logits[batch_idx, top_k_indices] = NEG_INF
+
+            # [B, V]
+            #probs = sp.special.softmax(current_logits / temperature, axis=-1)
+            probs = F.softmax(current_logits / temperature, dim=-1)
 
             # Sample tokens.
             next_token = torch.multinomial(probs, num_samples=1).squeeze(1)  # [B]

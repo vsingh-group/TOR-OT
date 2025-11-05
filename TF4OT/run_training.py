@@ -135,13 +135,13 @@ def training_routine(rank, cfg):
     # Create Tokenizer
     logger.info("Creating Tokenizer")
     if hasattr(cfg.tokenizer, "DigitTokenizer"):
-        params = cfg.tokenizer.DigitTokenizer
+        params    = cfg.tokenizer.DigitTokenizer
         tokenizer = tokenizers.MyDigitTokenizer(
             vocabulary=params.vocabulary,
             decimal_precision=params.decimal_precision
         )
     elif hasattr(cfg.tokenizer, "IEEEFloatTokenizer"):
-        params = cfg.tokenizer.IEEEFloatTokenizer
+        params    = cfg.tokenizer.IEEEFloatTokenizer
         tokenizer = tokenizers.IEEEFloatTokenizer(
             base=params.base,
             num_exponent_digits=params.num_exponent_digits,
@@ -150,17 +150,32 @@ def training_routine(rank, cfg):
 
     # Create Transformer Model
     logger.info("Creating Transformer Model")
-    pytorch_model = model.TokenRegressor(tokenizer,
-                                         encoder_ab=encoder_ab,
-                                         encoder_c=encoder_c,
-                                         emb_dim_ab=cfg.model.encoder.encoder_ab.emb_dim_ab,
-                                         emb_dim_c=cfg.model.encoder.encoder_c.emb_dim_c,
-                                         emb_dim_d=cfg.model.decoder.emb_dim_d,
-                                         max_seq_len=cfg.model.decoder.max_seq_len,
-                                         num_transformer_layers=cfg.model.decoder.num_transformer_layers,
-                                         num_attention_heads=cfg.model.decoder.num_attention_heads,
-                                         dropout=cfg.model.decoder.dropout
-                                         ).to(device)
+    num_prefix = cfg.model.num_prefix_tokens
+    if num_prefix == 1:
+        pytorch_model = model.TokenRegressor(tokenizer,
+                                             encoder_ab=encoder_ab,
+                                             encoder_c=encoder_c,
+                                             emb_dim_ab=cfg.model.encoder.encoder_ab.emb_dim_ab,
+                                             emb_dim_c=cfg.model.encoder.encoder_c.emb_dim_c,
+                                             emb_dim_d=cfg.model.decoder.emb_dim_d,
+                                             max_seq_len=cfg.model.decoder.max_seq_len,
+                                             num_transformer_layers=cfg.model.decoder.num_transformer_layers,
+                                             num_attention_heads=cfg.model.decoder.num_attention_heads,
+                                             dropout=cfg.model.decoder.dropout
+                                             ).to(device)
+    else:
+        pytorch_model = model.TokenRegressor_two_prefix_tokens(tokenizer,
+                                            encoder_ab=encoder_ab,
+                                            encoder_c=encoder_c,
+                                            emb_dim_ab=cfg.model.encoder.encoder_ab.emb_dim_ab,
+                                            emb_dim_c=cfg.model.encoder.encoder_c.emb_dim_c,
+                                            emb_dim_d=cfg.model.decoder.emb_dim_d,
+                                            max_seq_len=cfg.model.decoder.max_seq_len,
+                                            num_transformer_layers=cfg.model.decoder.num_transformer_layers,
+                                            num_attention_heads=cfg.model.decoder.num_attention_heads,
+                                            dropout=cfg.model.decoder.dropout
+                                            ).to(device)
+                                    
     pytorch_model.to(rank)
     pytorch_model = DDP(pytorch_model, device_ids=[rank])
     # the core model is now accessible as pytorch_model.module
@@ -182,6 +197,7 @@ def training_routine(rank, cfg):
     logger.info("Starting training loop")
     pytorch_model.train()
 
+
     # One-line progress per epoch
     pbar = tqdm(total=cfg.training.num_epochs, desc="Training", unit="epoch")
 
@@ -190,36 +206,71 @@ def training_routine(rank, cfg):
         running_loss = 0.0
         n_batches    = 0
         for batch in train_loader:
-
-            # encoder side
+            # -------------------------
+            # Encoder-side inputs
+            # -------------------------
             encoder_input_ab = batch[OT_INPUT_TOTAL].to(device)
 
+            # Only build cost prefix input if we actually use two prefixes AND cost is variable
+            encoder_input_c_flat = None
             if not cfg.data.dataset.cost_fixed:
-                encoder_input_c      = batch[OT_INPUT_COST_MATRIX]
-                encoder_input_c_flat = encoder_input_c.flatten(start_dim=1).to(device)
+                encoder_input_c      = batch[OT_INPUT_COST_MATRIX]                  # [B, n_bins, n_bins]
+                encoder_input_c_flat = encoder_input_c.flatten(start_dim=1).to(device)  # [B, n_bins*n_bins]
 
-            # tokenizer side (assumes your tokenizer.encode returns torch tensors)
-            text_input, pad_mask = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=True)
-            #text_input, pad_mask = tokenizer2.to_tokens(batch[ot_output_map], drop_last=True)
-            pad_mask = torch.cat([torch.full((encoder_input_ab.shape[0], 1), False), pad_mask], dim=1)
-            text_target, _ = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=False)
+            # -------------------------
+            # Tokenizer-side inputs
+            # -------------------------
+            # Teacher forcing inputs (no last token)
+            text_input, pad_mask_dec = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=True)  # [B, L_dec]
+            # Full targets (with last token)
+            text_target, _ = tokenizer.to_tokens(batch[OT_TARGET_PLAN_MATRIX], drop_last=False)           # [B, >=L_dec]
 
-            #sanity check: convert from_tokens
-            #text_target_from_tokens = tokenizer.from_tokens(text_target)
-            #text_input_from_tokens  = tokenizer.from_tokens(text_input)
-
-            # ignore PAD in targets
+            # Ignore PAD in targets (use your tokenizer's PAD id; you used `tokenizer.size`)
             text_target[text_target == tokenizer.size] = -100
 
+            # Prepend n_prefix non-pad entries to the key padding mask
+            B = encoder_input_ab.shape[0]
+            head = torch.zeros((B, num_prefix), dtype=torch.bool)
+            pad_mask = torch.cat([head, pad_mask_dec], dim=1).to(device)  # [B, n_prefix + L_dec]
+
             text_input  = text_input.to(device)
-            pad_mask    = pad_mask.to(device)
             text_target = text_target.to(device)
 
-            text_pred = pytorch_model.forward(encoder_input_ab,
-                                              text_input,
-                                              encoder_input_c=None if cfg.data.dataset.cost_fixed else encoder_input_c_flat,
-                                              pad_mask=pad_mask)
-            loss = criterion(text_pred.permute(0, 2, 1), text_target)
+            # -------------------------
+            # Forward pass
+            # -------------------------
+            text_pred = pytorch_model.forward(
+                encoder_input_ab=encoder_input_ab,
+                decoded_ids=text_input,
+                encoder_input_c=encoder_input_c_flat if not cfg.data.dataset.cost_fixed else None,
+                pad_mask=pad_mask
+            )  # [B, L_pred, V] where L_pred = n_prefix + L_dec
+
+            L_pred = text_pred.size(1)
+
+            # -------------------------
+            # Targets: 1-prefix vs 2-prefix
+            # -------------------------
+            if num_prefix == 1:
+                # Old behavior: use text_target directly, but ensure length matches L_pred
+                target = text_target
+                # Trim or right-pad with -100 if needed (robustness)
+                if target.size(1) > L_pred:
+                    target = target[:, :L_pred]
+                elif target.size(1) < L_pred:
+                    pad = torch.full((B, L_pred - target.size(1)), -100, dtype=target.dtype, device=target.device)
+                    target = torch.cat([target, pad], dim=1)
+            else:
+                # Two-prefix alignment: ignore first position, predict y0 at position 1
+                target = torch.full((B, L_pred), -100, dtype=torch.long, device=device)   # [-100, y0, y1, ...]
+                # Fill from position 1 onward with the first (L_pred-1) tokens of text_target
+                # (Trim if text_target is longer than needed)
+                target[:, 1:] = text_target[:, :L_pred-1]
+
+            # -------------------------
+            # Loss, step
+            # -------------------------
+            loss = criterion(text_pred.permute(0, 2, 1), target)
 
             optimizer.zero_grad()
             loss.backward()
@@ -227,7 +278,7 @@ def training_routine(rank, cfg):
 
             running_loss += loss.item()
             n_batches += 1
-        
+
         avg_loss = running_loss / max(1, n_batches)
         pbar.set_description(f"Epoch {epoch+1}/{cfg.training.num_epochs}")
         pbar.set_postfix(avg_loss=f"{avg_loss:.5f}")

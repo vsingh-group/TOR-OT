@@ -101,6 +101,7 @@ def get_model_name_from_cfg(cfg):
             f"_context{cfg.model.decoder.max_seq_len}"
             f"_tflayers{cfg.model.decoder.num_transformer_layers}"
             f"_tfheads{cfg.model.decoder.num_attention_heads}"
+            f"_num_prefix{cfg.model.num_prefix_tokens}"
             f"_dropout{cfg.model.decoder.dropout}"
             f"_data{cfg.data.dataset.size_s}"
             f"{'_rowwise' if cfg.data.dataset.row_wise else ''}"

@@ -27,6 +27,7 @@ data:
 
 model:
   save_path:      "./experiments/trained_models/cost_fixed"
+  num_prefix_tokens: 1
 #   encoder:
 #   # encoder for distributions source:a and target:b
 #     encoder_ab:

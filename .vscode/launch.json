@@ -13,7 +13,7 @@
             "python": "${command:python.interpreterPath}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}",
-                "CUDA_VISIBLE_DEVICES": "7"
+                "CUDA_VISIBLE_DEVICES": "3"
             },
             "args": [
                 "--config-name", "TF_100K_cost_variable"

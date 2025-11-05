@@ -12,6 +12,11 @@ pip3 install -e .
 pip3 install -r requirements.txt
 ```
 
+### Setup via docker
+```bash
+docker build -f image.dockerfile -t ivanjaenm/tf4ot:v1 . --push
+```
+
 ## 🛢️ Synthetic data generator
 
 ### Run data generator (cpu)

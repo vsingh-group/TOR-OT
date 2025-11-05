@@ -4,7 +4,7 @@
 # Override the defaults
 defaults:
   - data:       default
-  - model:      large
+  - model:      tiny
   - training:   default
   - tokenizer:  default
   - logging:    default
@@ -28,6 +28,7 @@ data:
 
 model:
   save_path:      "./experiments/trained_models/cost_variable"
+  num_prefix_tokens: 2
   # encoder:
   # # encoder for distributions source:a and target:b
   #   encoder_ab: 
@@ -49,7 +50,7 @@ model:
 
 training:
   num_epochs:            25
-  batch_size_per_device: 128
+  batch_size_per_device: 256
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1
