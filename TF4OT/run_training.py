@@ -15,6 +15,7 @@ import argparse
 import logging
 import json
 import os
+import sys
 
 # Add DDP imports
 import torch.multiprocessing as mp
@@ -106,10 +107,17 @@ def training_routine(rank, cfg):
     os.makedirs(cfg.model.save_path, exist_ok=True)
 
     # Combine directory with auto-generated filename
-    full_save_path = os.path.join(cfg.model.save_path, model_name)
+    save_dir         = cfg.model.save_path
+    model_full_path  = os.path.join(save_dir, model_name + ".pth")
+    log_full_path    = os.path.join(save_dir, model_name + "_training.log")
+    config_yaml_path = os.path.join(save_dir, model_name + ".yaml")
 
+    # init logging (file only on rank 0)
+    utils.setup_logging(log_full_path, rank)
+    
     logger.info(f"Auto-generated model name: {model_name}")
-    logger.info(f"Model will be saved to: {full_save_path}")
+    logger.info(f"Model will be saved to: {model_full_path}")
+    logger.info(f"Training log will be saved to: {log_full_path}")
 
     # Loading training DATASET and loader
     logger.info("Loading dataset: " + cfg.data.hf_dataset)
@@ -118,21 +126,23 @@ def training_routine(rank, cfg):
     logger.info(f"train_size={len_train_data}, training.batch_size={cfg.training.batch_size_per_device}, "
                 f"batches_per_epoch={len(train_loader)}")
 
-    # Create encoders
+    # Create ENCODERS
     logger.info("Creating Encoders")
 
     encoder_ab = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_ab.input_dim, cfg.model.encoder.encoder_ab.emb_dim_ab),
                                 nn.GELU(),
                                 nn.Linear(cfg.model.encoder.encoder_ab.emb_dim_ab, cfg.model.encoder.encoder_ab.emb_dim_ab)
-                                ).to(device)
+                                )
+    encoder_ab.to(device)
     if not cfg.data.dataset.cost_fixed:
         encoder_c = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_c.input_dim, cfg.model.encoder.encoder_c.emb_dim_c),
                                     nn.GELU(),
                                     nn.Linear(cfg.model.encoder.encoder_c.emb_dim_c, cfg.model.encoder.encoder_c.emb_dim_c)
-                                    ).to(device)
+                                    )
+        encoder_c.to(device)
     else: encoder_c = None
 
-    # Create Tokenizer
+    # Create TOKENIZER
     logger.info("Creating Tokenizer")
     if hasattr(cfg.tokenizer, "DigitTokenizer"):
         params    = cfg.tokenizer.DigitTokenizer
@@ -148,11 +158,12 @@ def training_routine(rank, cfg):
             num_mantissa_digits=params.num_mantissa_digits
         )
 
-    # Create Transformer Model
+    # Create TRANSFORMER MODEL
     logger.info("Creating Transformer Model")
     num_prefix = cfg.model.num_prefix_tokens
     if num_prefix == 1:
-        pytorch_model = model.TokenRegressor(tokenizer,
+        if cfg.model.use_flash_attention:
+            pytorch_model = model.TokenRegressor_flash(tokenizer,
                                              encoder_ab=encoder_ab,
                                              encoder_c=encoder_c,
                                              emb_dim_ab=cfg.model.encoder.encoder_ab.emb_dim_ab,
@@ -163,6 +174,18 @@ def training_routine(rank, cfg):
                                              num_attention_heads=cfg.model.decoder.num_attention_heads,
                                              dropout=cfg.model.decoder.dropout
                                              ).to(device)
+        else:
+            pytorch_model = model.TokenRegressor(tokenizer,
+                                                encoder_ab=encoder_ab,
+                                                encoder_c=encoder_c,
+                                                emb_dim_ab=cfg.model.encoder.encoder_ab.emb_dim_ab,
+                                                emb_dim_c=cfg.model.encoder.encoder_c.emb_dim_c,
+                                                emb_dim_d=cfg.model.decoder.emb_dim_d,
+                                                max_seq_len=cfg.model.decoder.max_seq_len,
+                                                num_transformer_layers=cfg.model.decoder.num_transformer_layers,
+                                                num_attention_heads=cfg.model.decoder.num_attention_heads,
+                                                dropout=cfg.model.decoder.dropout
+                                                ).to(device)
     else:
         pytorch_model = model.TokenRegressor_two_prefix_tokens(tokenizer,
                                             encoder_ab=encoder_ab,
@@ -175,7 +198,7 @@ def training_routine(rank, cfg):
                                             num_attention_heads=cfg.model.decoder.num_attention_heads,
                                             dropout=cfg.model.decoder.dropout
                                             ).to(device)
-                                    
+
     pytorch_model.to(rank)
     pytorch_model = DDP(pytorch_model, device_ids=[rank])
     # the core model is now accessible as pytorch_model.module
@@ -197,10 +220,14 @@ def training_routine(rank, cfg):
     logger.info("Starting training loop")
     pytorch_model.train()
 
-
-    # One-line progress per epoch
-    pbar = tqdm(total=cfg.training.num_epochs, desc="Training", unit="epoch")
-
+    pbar = tqdm(
+        total=cfg.training.num_epochs,
+        desc="Training",
+        unit="epoch",
+        file=utils.TqdmToLogger(logger)
+    )
+    
+    # MAIN TRAINING LOOP
     for epoch in range(cfg.training.num_epochs):
         train_loader.sampler.set_epoch(epoch)
         running_loss = 0.0
@@ -286,14 +313,12 @@ def training_routine(rank, cfg):
 
     pbar.close()
 
-    # Save the trained model and vocabulary (only on main process)
+    # SAVE the trained model and vocabulary (only on main process)
     ddp_barrier()
     if not dist.is_initialized() or dist.get_rank() == 0:
-        model_full_path  = full_save_path + ".pth"
-        config_yaml_path = full_save_path + ".yaml"   # use YAML (keeps ${hydra:...} intact)
 
-        logger.info(f"Saving model to {full_save_path}")
-        os.makedirs(os.path.dirname(full_save_path), exist_ok=True)
+        logger.info(f"Saving model to {model_full_path}")
+        os.makedirs(os.path.dirname(model_full_path), exist_ok=True)
 
         # Save the underlying module’s weights if wrapped in DDP
         state_dict = (pytorch_model.module.state_dict()

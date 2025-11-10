@@ -1,9 +1,9 @@
 # TF4OT: Transformers for Optimal Transport.
 ### Code for the paper: _"Transformers learn to approximately solve Optimal Transport"_.
 
-## ⚙️ Environment Setup
+## ⚙️ Python Environment Setup
 
-### Setup python environment via conda
+### Setup via conda environment
 ```bash
 source ~/anaconda3/etc/profile.d/conda.sh
 conda create --name env_TF4OT python=3.11

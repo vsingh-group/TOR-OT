@@ -48,9 +48,9 @@ model:
 #     dropout:                0
 
 training:
-  num_epochs:            10
-  batch_size_per_device: 128
-  learning_rate:         1e-4
+  num_epochs:            300
+  batch_size_per_device: 3584
+  learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1
   world_size:            null #null will use all gpus. 0 will use cpu

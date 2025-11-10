@@ -13,7 +13,6 @@ from scipy import sparse
 from tqdm import tqdm
 import numpy as np
 import logging
-import yaml
 import os
 import nbformat
 from nbformat.v4 import new_notebook, new_markdown_cell, new_code_cell
@@ -51,19 +50,27 @@ def inference_routine(cfg):
     # Create descriptive model name
     # if cfg.model.name is not defined then create a new name:
     name = cfg.model["name"] if "name" in cfg.model else None
-    if name: model_name = f"{name}.pth"
+    if name: model_name = name
     else: model_name = utils.get_model_name_from_cfg(cfg)
 
     # Set default directory if not provided
     os.makedirs(cfg.model.save_path, exist_ok=True)
 
     # Combine directory with auto-generated filename
-    full_save_path = os.path.join(cfg.model.save_path, model_name)
+    save_dir         = cfg.model.save_path
+    model_base_path  = os.path.join(save_dir, model_name)
+    model_full_path  = model_base_path + ".pth"
+    log_full_path    = model_base_path + "_inference.log"
+
+    # init logging (file only on rank 0)
+    utils.setup_logging(log_full_path, 0)
+
     logger.info(f"Auto-generated model name: {model_name}")
-    
+    logger.info(f"Inference log will be saved to: {log_full_path}")
+
     # Loading MODEL
-    logger.info(f"Loading model from: {full_save_path}")
-    pytorch_model, tokenizer = load_model_by_name(full_save_path)
+    logger.info(f"Loading model from: {model_full_path}")
+    pytorch_model, tokenizer = load_model_by_name(model_base_path)
 
     # Loading TEST dataset
     logger.info("Loading dataset: " + cfg.data.hf_dataset)
@@ -418,7 +425,7 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
 
     model_full_path  = full_save_path + ".pth"
     yaml_config_path = full_save_path + ".yaml"
-    
+
     if os.path.exists(yaml_config_path):
         cfg = OmegaConf.load(yaml_config_path)
         cfg = OmegaConf.to_container(cfg, resolve=True)
@@ -469,18 +476,57 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
 
     # Rebuild model using decoder config
     decoder_cfg     = cfg["model"]["decoder"]
-    pytorch_model   = model.TokenRegressor(
-        tokenizer   = tokenizer,
-        encoder_ab  = encoder_ab,
-        encoder_c   = encoder_c,
-        emb_dim_ab  = emb_dim_ab,
-        emb_dim_c   = emb_dim_c,
-        emb_dim_d   = decoder_cfg["emb_dim_d"],
-        max_seq_len = decoder_cfg["max_seq_len"],
-        num_transformer_layers = decoder_cfg["num_transformer_layers"],
-        num_attention_heads    = decoder_cfg["num_attention_heads"],
-        dropout     = decoder_cfg.get("dropout", 0.0)  # Use default if not present
-    ).to(device)
+    # pytorch_model   = model.TokenRegressor(
+    #     tokenizer   = tokenizer,
+    #     encoder_ab  = encoder_ab,
+    #     encoder_c   = encoder_c,
+    #     emb_dim_ab  = emb_dim_ab,
+    #     emb_dim_c   = emb_dim_c,
+    #     emb_dim_d   = decoder_cfg["emb_dim_d"],
+    #     max_seq_len = decoder_cfg["max_seq_len"],
+    #     num_transformer_layers = decoder_cfg["num_transformer_layers"],
+    #     num_attention_heads    = decoder_cfg["num_attention_heads"],
+    #     dropout     = decoder_cfg.get("dropout", 0.0)  # Use default if not present
+    # ).to(device)
+
+    num_prefix = cfg["model"]["num_prefix_tokens"]
+    if num_prefix == 1:
+        if cfg["model"]["use_flash_attention"]:
+            pytorch_model = model.TokenRegressor_flash(tokenizer  = tokenizer,
+                                             encoder_ab = encoder_ab,
+                                             encoder_c  = encoder_c,
+                                             emb_dim_ab = emb_dim_ab,
+                                             emb_dim_c  = emb_dim_c,
+                                             emb_dim_d  = decoder_cfg["emb_dim_d"],
+                                             max_seq_len= decoder_cfg["max_seq_len"],
+                                             num_transformer_layers = decoder_cfg["num_transformer_layers"],
+                                             num_attention_heads    = decoder_cfg["num_attention_heads"],
+                                             dropout                = decoder_cfg.get("dropout", 0.0)
+                                             ).to(device)
+        else:
+            pytorch_model = model.TokenRegressor(tokenizer  = tokenizer,
+                                             encoder_ab = encoder_ab,
+                                             encoder_c  = encoder_c,
+                                             emb_dim_ab = emb_dim_ab,
+                                             emb_dim_c  = emb_dim_c,
+                                             emb_dim_d  = decoder_cfg["emb_dim_d"],
+                                             max_seq_len= decoder_cfg["max_seq_len"],
+                                             num_transformer_layers = decoder_cfg["num_transformer_layers"],
+                                             num_attention_heads    = decoder_cfg["num_attention_heads"],
+                                             dropout                = decoder_cfg.get("dropout", 0.0)
+                                             ).to(device)
+    else:
+        pytorch_model = model.TokenRegressor_two_prefix_tokens(tokenizer=tokenizer,
+                                            encoder_ab=encoder_ab,
+                                            encoder_c=encoder_c,
+                                            emb_dim_ab=emb_dim_ab,
+                                            emb_dim_c=emb_dim_c,
+                                            emb_dim_d=decoder_cfg["emb_dim_d"],
+                                            max_seq_len=decoder_cfg["max_seq_len"],
+                                            num_transformer_layers=decoder_cfg["num_transformer_layers"],
+                                            num_attention_heads=decoder_cfg["num_attention_heads"],
+                                            dropout=decoder_cfg.get("dropout", 0.0)
+                                            ).to(device)
 
     # Load weights
     model_state = torch.load(model_full_path, map_location=device, weights_only=True)
@@ -900,8 +946,8 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
 
         # Run model INFERENCE
         text_ids_pred = pytorch_model.generate(
-            encoder_input_ab=encoder_input_ab,
-            encoder_input_c= encoder_input_c,
+            encoder_input_ab = encoder_input_ab,
+            encoder_input_c  = encoder_input_c,
             temperature=0.1
         )
         text_pred = tokenizer.from_tokens(text_ids_pred)

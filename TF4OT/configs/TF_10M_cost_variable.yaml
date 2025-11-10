@@ -4,14 +4,13 @@
 # Override the defaults
 defaults:
   - data:       default
-  - model:      tiny
+  - model:      small
   - training:   default
   - tokenizer:  default
   - logging:    default
   - _self_
 
 # Override specific parameters
-
 data:
   hf_dataset:     "ivanjaenm/otdata_10M_rowwise_cost_variable"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
@@ -28,7 +27,8 @@ data:
 
 model:
   save_path:      "./experiments/trained_models/cost_variable"
-  num_prefix_tokens: 2
+  num_prefix_tokens: 1
+  use_flash_attention: true
   # encoder:
   # # encoder for distributions source:a and target:b
   #   encoder_ab: 
@@ -49,8 +49,8 @@ model:
   #   dropout:                0
 
 training:
-  num_epochs:            25
-  batch_size_per_device: 256
+  num_epochs:            50
+  batch_size_per_device: 2560
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1
