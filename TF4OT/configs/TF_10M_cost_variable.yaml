@@ -50,7 +50,8 @@ model:
 
 training:
   num_epochs:            50
-  batch_size_per_device: 2560
+  #batch_size_per_device: 2560
+  batch_size_per_device: 256
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1
@@ -62,7 +63,6 @@ tokenizer:
     decimal_precision: 4
     vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']
   # IEEEFloatTokenizer:
-  #   base: 10
   #   num_exponent_digits: 2
   #   num_mantissa_digits: 10
 

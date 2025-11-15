@@ -633,3 +633,171 @@ class MyDigitTokenizer:
         texts = [''.join([self.ids_mapping.get(t, '') for t in tokens]) for tokens in token_ids]
 
         return texts
+
+class MyIEEETokenizer:
+    """
+    MyIEEETokenizer
+
+    Wrapper around P10Tokenizer that exposes an interface similar to MyDigitTokenizer.
+
+    - Uses P10-style encoding: each float is represented as:
+        [sign_token, digit_1, ..., digit_{num_digits}, exponent_token]
+    - Tokens are those produced by P10Tokenizer (e.g. '<+>', '<3>', '<E-10>', ...).
+    - We maintain an integer vocabulary over these tokens + an implicit pad id.
+
+    Args:
+      num_digits: number of mantissa digits used in P10Tokenizer.
+      exponent_range: exponent range in P10Tokenizer ([-range, +range]).
+
+    Methods:
+      to_tokens(float_lists, pad=True, drop_last=False)
+        float_lists : list of list of floats (batch of sequences)
+        Returns:
+          token_ids : LongTensor of shape (B, T) if pad=True, else list[LongTensor]
+          mask      : BoolTensor of shape (B, T) with True where pad, else None
+
+      from_tokens(token_ids)
+        token_ids : LongTensor of shape (B, T)
+        Returns:
+          decoded : list of list of floats (one list per batch element)
+    """
+
+    def __init__(self,
+                 num_digits: int = 4,
+                 exponent_range: int = 10):
+        # Underlying P10-style tokenizer for single floats
+        self.p10 = P10Tokenizer(num_digits=num_digits,
+                                exponent_range=exponent_range)
+
+        # Vocabulary = all P10 tokens (already in <...> form)
+        self.vocabulary = list(self.p10.all_tokens())
+        self.size = len(self.vocabulary)        # last id is reserved as pad_id
+
+        # Mappings token <-> id
+        self.vocabulary_mapping = {v: i for i, v in enumerate(self.vocabulary)}
+        self.ids_mapping = {i: v for v, i in self.vocabulary_mapping.items()}
+
+        # Implicit pad id (just like in MyDigitTokenizer)
+        self.pad_id = self.size
+
+        # For reference
+        self.num_digits = num_digits
+        self.exponent_range = exponent_range
+
+    @property
+    def vocab_size(self) -> int:
+        # All real tokens + 1 pad token
+        return len(self.all_tokens()) + 1
+
+    def all_tokens(self) -> OrderedSet[str]:
+        # Delegates to underlying P10 tokenizer
+        return self.p10.all_tokens()
+
+    # -------------------------------------------------------------------------
+    # Encoding
+    # -------------------------------------------------------------------------
+    def _encode_sequence(self,
+                         floats: list[float],
+                         drop_last: bool = False) -> list[int]:
+        """
+        Encode a single list of floats into a flat list of token ids.
+        """
+        token_strs: list[str] = []
+        for f in floats:
+            # P10Tokenizer.to_tokens returns a list[str] of serialized tokens
+            token_strs.extend(self.p10.to_tokens(f))
+
+        if drop_last and token_strs:
+            token_strs = token_strs[:-1]
+
+        # Map tokens to ids
+        token_ids = [self.vocabulary_mapping[t] for t in token_strs]
+        return token_ids
+
+    def to_tokens(self,
+                  float_lists: list[list[float]],
+                  pad: bool = True,
+                  drop_last: bool = False):
+        """
+        Encode a batch of float sequences.
+
+        Args:
+          float_lists: list of list of floats, shape (B, variable_length).
+          pad: whether to left-pad sequences to a common length.
+          drop_last: if True, drop the last token of each encoded sequence.
+
+        Returns:
+          token_ids:
+            - if pad=True: LongTensor of shape (B, T_max)
+            - if pad=False: list[LongTensor] (ragged)
+          mask:
+            - if pad=True: BoolTensor (B, T_max) where True = pad position
+            - if pad=False: None
+        """
+        # Encode each sequence individually
+        encoded_seqs = [
+            self._encode_sequence(floats, drop_last=drop_last)
+            for floats in float_lists
+        ]
+
+        mask = None
+
+        if pad:
+            max_len = max(len(seq) for seq in encoded_seqs) if encoded_seqs else 0
+
+            padded_seqs = []
+            for seq in encoded_seqs:
+                pad_len = max_len - len(seq)
+                padded = seq + [self.pad_id] * pad_len
+                padded_seqs.append(torch.LongTensor(padded))
+
+            token_ids = torch.stack(padded_seqs)
+            mask = token_ids == self.pad_id
+        else:
+            token_ids = [torch.LongTensor(seq) for seq in encoded_seqs]
+
+        return token_ids, mask
+
+    # -------------------------------------------------------------------------
+    # Decoding
+    # -------------------------------------------------------------------------
+    def from_tokens(self, token_ids):
+        """
+        Decode a batch of token id sequences back into floats.
+
+        Args:
+          token_ids: torch.LongTensor of shape (B, T) OR equivalent
+                     (like a numpy array / tensor on CPU).
+
+        Returns:
+          decoded: list[list[float]]
+            decoded[b] is the list of floats for the b-th sequence.
+        """
+        # Convert to numpy for easier iteration (assumes on CPU)
+        token_ids = np.array(token_ids.cpu().numpy())
+        if token_ids.ndim == 1:
+            # Promote to batch dimension if a single sequence is passed
+            token_ids = token_ids[None, :]
+
+        decoded_batch: list[list[float]] = []
+        tokens_per_obj = self.p10.num_tokens_per_obj
+
+        for row in token_ids:
+            # Strip pad positions and map ids -> token strings
+            valid_ids = [int(t) for t in row if t != self.pad_id]
+            token_strs = [self.ids_mapping[i] for i in valid_ids]
+
+            if len(token_strs) % tokens_per_obj != 0:
+                raise ValueError(
+                    f"Token length {len(token_strs)} is not a multiple of "
+                    f"tokens_per_obj={tokens_per_obj}.")
+
+            floats: list[float] = []
+            for i in range(0, len(token_strs), tokens_per_obj):
+                chunk = token_strs[i:i + tokens_per_obj]
+                f = self.p10.from_tokens(chunk)
+                floats.append(f)
+
+            decoded_batch.append(floats)
+
+        return decoded_batch

@@ -610,7 +610,7 @@ class TokenRegressor_two_prefix_tokens(nn.Module):
             fill_value=-1,
             dtype=torch.long,
             device=encoder_input_ab.device
-       )
+        )
         print("Starting generation...")
         for i in range(self.max_seq_len):
             print (f"Generating token {i+1}/{self.max_seq_len}", end='\r')

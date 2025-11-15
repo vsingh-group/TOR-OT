@@ -3,7 +3,7 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate env_TF4OT
 
 # run all configs
-export CUDA_VISIBLE_DEVICES=2,4,5,6,7
+export CUDA_VISIBLE_DEVICES=2,3,5,6,7
 
 # run training and inference
 
