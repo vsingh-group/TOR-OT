@@ -57,7 +57,9 @@ def inference_routine(cfg):
     os.makedirs(cfg.model.save_path, exist_ok=True)
 
     # Combine directory with auto-generated filename
-    save_dir         = cfg.model.save_path
+    #save_dir         = cfg.model.save_path
+    save_dir         = os.path.join(cfg.model.save_path, model_name)
+
     model_base_path  = os.path.join(save_dir, model_name)
     model_full_path  = model_base_path + ".pth"
     log_full_path    = model_base_path + "_inference.log"
@@ -402,9 +404,9 @@ def inference_routine(cfg):
     nb.cells = cells
     
     # Save notebook
-    out_dir = getattr(cfg.inference, 'out_dir', './inference_results')
-    os.makedirs(out_dir, exist_ok=True)
-    notebook_path = os.path.join(out_dir, f'inference_testset_{model_name}.ipynb')
+    save_dir = os.path.join(cfg.inference.out_dir, model_name)
+    os.makedirs(save_dir, exist_ok=True)
+    notebook_path = os.path.join(save_dir, f'{model_name}_inference_testset.ipynb')
     
     with open(notebook_path, 'w') as f:
         nbformat.write(nb, f)
@@ -1133,7 +1135,8 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
 
     # Save notebook
     os.makedirs(cfg.inference.out_dir, exist_ok=True)
-    notebook_path = os.path.join(cfg.inference.out_dir, f'inference_custom_{model_name}.ipynb')
+    save_dir = os.path.join(cfg.inference.out_dir, model_name)
+    notebook_path = os.path.join(save_dir, f'{model_name}_inference_customset.ipynb')
 
     with open(notebook_path, 'w') as f:
         nbformat.write(nb, f)

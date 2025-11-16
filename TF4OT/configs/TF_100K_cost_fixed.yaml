@@ -13,7 +13,8 @@ defaults:
 # Override specific parameters
 data:
   hf_dataset:     "ivanjaenm/otdata_100K_rowwise_cost_fixed"
-  hf_cache_dir:   "/data/ivan/datasets/hfcache"
+#  hf_cache_dir:   "/data/ivan/datasets/hfcache"
+  hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
     size_n:                100_000
     size_s:                '100K'
@@ -26,7 +27,7 @@ data:
     num_workers:           20
 
 model:
-  save_path:      "./experiments/trained_models/cost_fixed"
+  save_path:      "./experiments/cost_fixed"
   num_prefix_tokens: 1
 #   encoder:
 #   # encoder for distributions source:a and target:b
@@ -69,7 +70,7 @@ tokenizer:
   #   num_mantissa_digits: 10
 
 inference:
-  out_dir:      "./experiments/results/cost_fixed"
+  out_dir:      "./experiments/cost_fixed"
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}

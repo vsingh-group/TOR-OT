@@ -13,7 +13,8 @@ defaults:
 # Override specific parameters
 data:
   hf_dataset:     "ivanjaenm/otdata_10M_rowwise_cost_variable"
-  hf_cache_dir:   "/data/ivan/datasets/hfcache"
+#  hf_cache_dir:   "/data/ivan/datasets/hfcache"
+  hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
     size_n:                10_000_000
     size_s:                '10M'
@@ -26,7 +27,7 @@ data:
     num_workers:           20
 
 model:
-  save_path:      "./experiments/trained_models/cost_variable"
+  save_path:      "./experiments/cost_variable"
   num_prefix_tokens: 1
   use_flash_attention: true
   # encoder:
@@ -67,7 +68,7 @@ tokenizer:
   #   num_mantissa_digits: 10
 
 inference:
-  out_dir:      "./experiments/results/cost_variable"
+  out_dir:      "./experiments/cost_variable"
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}

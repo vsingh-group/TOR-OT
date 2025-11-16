@@ -241,7 +241,7 @@ class TokenRegressor_flash(nn.Module):
        )
         print("Starting generation...")
         for i in range(self.max_seq_len):
-            print (f"Generating token {i+1}/{self.max_seq_len}", end='\r')
+            #print (f"Generating token {i+1}/{self.max_seq_len}", end='\r')
             # tokens generated so far
             tensor_slice = token_ids[:, :i]
             #tensor_slice = torch.from_numpy(token_ids[:, :i]).to(device=encoder_input_ab[0].device, dtype=torch.long)

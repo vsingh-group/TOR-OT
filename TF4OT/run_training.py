@@ -107,9 +107,9 @@ def training_routine(rank, cfg):
     os.makedirs(cfg.model.save_path, exist_ok=True)
 
     # Combine directory with auto-generated filename
-    save_dir         = cfg.model.save_path
+    save_dir         = os.path.join(cfg.model.save_path, model_name)
     model_full_path  = os.path.join(save_dir, model_name + ".pth")
-    log_full_path    = os.path.join(save_dir, model_name + "_training.log")
+    log_full_path    = os.path.join(save_dir, model_name + ".log")
     config_yaml_path = os.path.join(save_dir, model_name + ".yaml")
 
     # init logging (file only on rank 0)
