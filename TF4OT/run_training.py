@@ -16,6 +16,7 @@ import logging
 import json
 import os
 import sys
+import random
 
 # Add DDP imports
 import torch.multiprocessing as mp
@@ -35,7 +36,7 @@ from torch.utils.data._utils.collate import default_collate
 
 def ddp_setup(rank, world_size):
     os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12345"
+    os.environ["MASTER_PORT"] = "12346"
     torch.cuda.set_device(rank)
     dist.init_process_group( backend="nccl", rank=rank, world_size=world_size)
 

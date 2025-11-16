@@ -3,7 +3,7 @@
 # run this command after updating Dockerfile
 docker login
 # build for single platform
-docker build -f scripts/image.dockerfile -t ivanjaenm/decoder4ot:v0 . --push
+docker build -f image.dockerfile -t ivanjaenm/tf4ot:v1 . --push
 # built for both platforms
 docker buildx build --platform linux/amd64,linux/arm64 -t ivanjaenm/decoder4ot:v0 -f scripts/image.dockerfile . --push
 #docker system prune --all --force --volumes
