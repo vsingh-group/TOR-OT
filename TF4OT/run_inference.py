@@ -2,6 +2,8 @@ from TF4OT import tokenizers
 from TF4OT import model
 from TF4OT import utils
 from TF4OT.utils import my_dtype_np, my_dtype_torch
+import ot.plot
+import matplotlib.pylab as pl
 from datasets import load_dataset
 import torch
 import functools
@@ -890,8 +892,10 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         # Define support points
         if cost_fixed:
             # fixed C case
-            xs = np.arange(n_bins, dtype=np.float32)[:, None]
-            xt = np.arange(n_bins, dtype=np.float32)[:, None]
+            xs = np.zeros((n_bins, 2))
+            xt = np.zeros((n_bins, 2))
+            xs[:, 0] = np.arange(n_bins, dtype=np.float32)
+            xt[:, 0] = np.arange(n_bins, dtype=np.float32)
         else:
             x_low  = 0; x_high = 10
             xs = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
@@ -922,7 +926,7 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
                     source_tensor,
                     target_tensor,
                     torch.tensor(input_idx, dtype=my_dtype_torch)
-                )).to(my_dtype_torch)                
+                )).to(my_dtype_torch)
                 encoder_input_ab.append(input_total)
 
                 if not cost_fixed:
@@ -984,16 +988,16 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         })
 
         # Create visualization
-        fig, axarr = plt.subplots(1, 5, figsize=(18, 3.5), dpi=120)
+        fig, axarr = plt.subplots(1, 6, figsize=(20, 3.5), dpi=120)
         fig.suptitle(f"{X_sampler.name} → {Y_sampler.name}", fontsize=16, y=1.02)
 
         # Titles
         axarr[0].set_title(f"Source $\\mu$ (1D)", fontsize=12)
         axarr[1].set_title(f"Target $\\nu$ (1D)", fontsize=12)
         axarr[2].set_title("Cost Matrix", fontsize=12)
-        axarr[3].set_title(r"$\hat{\pi}$ Model Prediction", fontsize=12)
-        axarr[4].set_title(r"$\pi$ Ground Truth (POT)", fontsize=12)
-
+        axarr[3].set_title(r"$\pi$ Ground Truth (POT)", fontsize=12)
+        axarr[4].set_title(r"$\hat{\pi}$ Model Prediction", fontsize=12)
+        axarr[4].set_title(r"$\hat{\pi}$ Model Prediction", fontsize=12)
         # Common vmin/vmax for OT plans
         vmin = 0
         vmax = max(np.max(ot_plan_pred), np.max(ot_plan_gt))
@@ -1026,28 +1030,38 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         axarr[2].set_ylabel("Source bins")
         plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
 
-        # --- Model Prediction ---
-        im3 = axarr[3].imshow(ot_plan_pred, cmap='Reds', vmin=vmin, vmax=vmax, 
+        # --- Ground truth ---
+        im3 = axarr[3].imshow(ot_plan_gt, cmap='Blues', vmin=vmin, vmax=vmax, 
                              origin='lower', aspect="auto")
         axarr[3].set_xlabel("Target bins")
         axarr[3].set_ylabel("Source bins")
-        axarr[3].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_pred_sparse.sum():.5f}$', 
+        axarr[3].text(0.02, 0.98, rf'$\sum \pi = {otplan_solve_sparse.sum():.5f}$', 
                      transform=axarr[3].transAxes, fontsize=10,
                      verticalalignment='top', bbox=dict(boxstyle='round', 
                      facecolor='white', alpha=0.8))
         plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
 
-        # --- Ground truth ---
-        im4 = axarr[4].imshow(ot_plan_gt, cmap='Blues', vmin=vmin, vmax=vmax, 
+        # --- Model Prediction ---
+        im4 = axarr[4].imshow(ot_plan_pred, cmap='Reds', vmin=vmin, vmax=vmax, 
                              origin='lower', aspect="auto")
         axarr[4].set_xlabel("Target bins")
         axarr[4].set_ylabel("Source bins")
-        axarr[4].text(0.02, 0.98, rf'$\sum \pi = {otplan_solve_sparse.sum():.5f}$', 
+        axarr[4].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_pred_sparse.sum():.5f}$',
                      transform=axarr[4].transAxes, fontsize=10,
-                     verticalalignment='top', bbox=dict(boxstyle='round', 
+                     verticalalignment='top', bbox=dict(boxstyle='round',
                      facecolor='white', alpha=0.8))
         plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
-        
+
+        # --- Model Prediction on Dataset (samples + plan on axarr[5]) ---
+        # Make axarr[5] the current axis so plot2D_samples_mat draws there
+        plt.sca(axarr[5])
+        # set title
+        pl.title("Source and Target distributions")
+        ot.plot.plot2D_samples_mat(xs, xt, ot_plan_pred, c=[0.5, 0.5, 1])
+        pl.plot(xs[:, 0], xs[:, 1], "+b", label="Source samples")
+        pl.plot(xt[:, 0], xt[:, 1], "xr", label="Target samples")
+        pl.axis("equal")
+
         # Add error metrics text
         fig.text(0.5, -0.02, f'MSE Diff (sparse): {mse_diff_sparse:.3e}  |  ' + 
                 f'OT Cost Diff: {otcost_diff:.3e}',

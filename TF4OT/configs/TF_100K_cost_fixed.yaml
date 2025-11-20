@@ -28,7 +28,8 @@ data:
 
 model:
   save_path:      "./experiments/cost_fixed"
-  num_prefix_tokens: 1
+  num_prefix_tokens:   1
+  use_flash_attention: true
 #   encoder:
 #   # encoder for distributions source:a and target:b
 #     encoder_ab:
@@ -49,7 +50,7 @@ model:
 #     dropout:                0
 
 training:
-  num_epochs:            300
+  num_epochs:            50
   batch_size_per_device: 3584
   learning_rate:         1e-6
   use_amp:               false

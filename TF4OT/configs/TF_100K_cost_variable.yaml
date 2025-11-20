@@ -15,7 +15,6 @@ data:
   hf_dataset:     "ivanjaenm/otdata_100K_rowwise_cost_variable"
 #  hf_cache_dir:   "/data/ivan/datasets/hfcache"
   hf_cache_dir:   "./home/moros2/hfcache"
-
   dataset:
     size_n:                100_000
     size_s:                '100K'

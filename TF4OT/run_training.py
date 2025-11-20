@@ -239,7 +239,7 @@ def training_routine(rank, cfg):
             # -------------------------
             encoder_input_ab = batch[OT_INPUT_TOTAL].to(device)
 
-            # Only build cost prefix input if we actually use two prefixes AND cost is variable
+            # Only build cost prefix input if cost is variable
             encoder_input_c_flat = None
             if not cfg.data.dataset.cost_fixed:
                 encoder_input_c      = batch[OT_INPUT_COST_MATRIX]                  # [B, n_bins, n_bins]

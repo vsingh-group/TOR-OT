@@ -13,8 +13,8 @@ defaults:
 # Override specific parameters
 data:
   hf_dataset:     "ivanjaenm/otdata_10M_rowwise_cost_variable"
-#  hf_cache_dir:   "/data/ivan/datasets/hfcache"
-  hf_cache_dir:   "./home/moros2/hfcache"
+  hf_cache_dir:   "/data/ivan/datasets/hfcache"
+#  hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
     size_n:                10_000_000
     size_s:                '10M'
@@ -51,8 +51,8 @@ model:
 
 training:
   num_epochs:            50
-  #batch_size_per_device: 2560
-  batch_size_per_device: 256
+  batch_size_per_device: 2560
+  #batch_size_per_device: 256
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1

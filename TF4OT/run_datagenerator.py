@@ -9,6 +9,7 @@ probability distributions using sparse matrix representations.
 import ot
 import json
 import torch
+import random
 import argparse
 import numpy as np
 import scipy.sparse as sp
@@ -56,7 +57,7 @@ def coo_tolist(A: sp.coo_matrix, j: int) -> list:
 
     return sparse_rep
 
-def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', cost_fixed=True, row_wise=True, device: str = 'cpu'):
+def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', cost_type='fixed', row_wise=True, device: str = 'cpu'):
     """
     Generator function that yields individual samples for the optimal transport dataset.
 
@@ -80,23 +81,33 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
     target_dist /= target_dist.sum(axis=1, keepdims=True)
 
     # Define support points
-    # Fixed cost matrix case
-    xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
-    xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
-    # Define cost matrix
-    C = ot.dist(xs, xt, metric=metric)
-    C /= C.max()
+    # Fixed cost matrix case - same C for all samples
+    if cost_type == 'fixed':
+        xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
+        xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
+        # Define cost matrix
+        C = ot.dist(xs, xt, metric=metric)
+        C /= C.max()
 
     print("Computing optimal transport maps and yielding samples...")
     for i in tqdm(range(dataset_size), desc="Processing datasets"):
         # Variable cost matrix case
-        if not cost_fixed:
+        if cost_type == 'variable':
             x_low  = 0; x_high = 10
             xs = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
             xt = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
             C = ot.dist(xs, xt, metric=metric)
             C /= C.max()
-
+        elif cost_type == 'semivariable':
+            xs = np.zeros((n_bins, 2))
+            xt = np.zeros((n_bins, 2))
+            xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
+            xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
+            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'cosine', 'mahalanobis']
+            # pick a random metric
+            metric = random.choice(possible_metrics)
+            C = ot.dist(xs, xt, metric=metric)
+            C /= C.max()
         # Sparse plan
         # otplan_emd_sparse = ot.emd_1d(
         #     xs, xt,
@@ -335,6 +346,8 @@ def main():
     parser.add_argument("--output_dir", type=str, default="./ot_dataset", help="Output directory for dataset")
     parser.add_argument("--metric", type=str, default="sqeuclidean", help="Distance metric")
     parser.add_argument("--cost_fixed", action="store_true", help="Is the cost matrix C, fixed?")
+    parser.add_argument("--cost_variable", action="store_true", help="Is the cost matrix C, variable?")
+    parser.add_argument("--cost_semivariable", action="store_true", help="Is the cost matrix C, semivariable?")
     parser.add_argument("--device", type=str, default="cpu", help="Device to use (cpu/cuda)")
     parser.add_argument("--test_split", type=float, default=0.2, help="Test split ratio")
     parser.add_argument("--random_split", action="store_true", help="Use random split instead of consecutive rows")
@@ -355,8 +368,17 @@ def main():
     
     # Create dataset using generator
     print("Creating Hugging Face dataset...")
+    if args.cost_fixed:
+        cost_type = "fixed"
+    elif args.cost_variable:
+        cost_type = "variable"
+    elif args.cost_semivariable:
+        cost_type = "semivariable"
+    else:
+        raise ValueError("Invalid cost type")
+    print(f"Cost type: {cost_type}")
     dataset = Dataset.from_generator(
-        lambda: ot_sample_generator(args.n_bins, args.dataset_size, args.metric, args.cost_fixed, args.row_wise, args.device)
+        lambda: ot_sample_generator(args.n_bins, args.dataset_size, args.metric, cost_type, args.row_wise, args.device)
     )
 
     # Split into train/test
