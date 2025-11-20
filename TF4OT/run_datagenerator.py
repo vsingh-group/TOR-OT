@@ -104,7 +104,7 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             xt = np.zeros((n_bins, 2))
             xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
             xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
-            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'cosine', 'mahalanobis']
+            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming']
             # pick a random metric
             metric = random.choice(possible_metrics)
             # one-hot encode the chosen metric
@@ -144,21 +144,21 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
                     torch.tensor(input_idx, dtype=my_dtype_torch)
                 )).to(my_dtype_torch).to(device)
 
+                # Build dict in the desired key order
                 sample = {
                     'source_dist':  source_tensor.tolist(),
                     'target_dist':  target_tensor.tolist(),
-                    'input_cost_matrix':  C.tolist(),
-                    'input_idx':    input_idx,
-                    'input_total':  input_total.tolist(),
-                    # 'target_otplan_emd_sparse':   coo_tolist(otplan_emd_sparse, j),
-                    # 'target_otplan_emd_dense':    otplan_emd_dense[j].tolist(),
-                    'target_otplan_solve_dense':  otplan_solve_dense[j].tolist(),
-                    'target_otplan_solve_sparse': coo_tolist(otplan_solve_sparse, j),
                 }
-
-                # Only add one-hot cost encoding for the semivariable case
+                # For semivariable, insert input_cost *before* input_cost_matrix
                 if cost_type == 'semivariable':
                     sample['input_cost'] = metric_one_hot
+                sample['input_cost_matrix'] = C.tolist()
+                sample['input_idx']   = input_idx
+                sample['input_total'] = input_total.tolist()
+                # sample['target_otplan_emd_sparse'] = coo_tolist(otplan_emd_sparse, j)
+                # sample['target_otplan_emd_dense']  = otplan_emd_dense[j].tolist()
+                sample['target_otplan_solve_dense']  = otplan_solve_dense[j].tolist()
+                sample['target_otplan_solve_sparse'] = coo_tolist(otplan_solve_sparse, j)
 
                 yield sample
 
