@@ -90,6 +90,7 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
         C /= C.max()
 
     print("Computing optimal transport maps and yielding samples...")
+    metric_one_hot = None
     for i in tqdm(range(dataset_size), desc="Processing datasets"):
         # Variable cost matrix case
         if cost_type == 'variable':
@@ -106,6 +107,8 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'cosine', 'mahalanobis']
             # pick a random metric
             metric = random.choice(possible_metrics)
+            # one-hot encode the chosen metric
+            metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
             C = ot.dist(xs, xt, metric=metric)
             C /= C.max()
         # Sparse plan
@@ -141,17 +144,24 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
                     torch.tensor(input_idx, dtype=my_dtype_torch)
                 )).to(my_dtype_torch).to(device)
 
-                yield {
+                sample = {
                     'source_dist':  source_tensor.tolist(),
                     'target_dist':  target_tensor.tolist(),
                     'input_cost_matrix':  C.tolist(),
                     'input_idx':    input_idx,
                     'input_total':  input_total.tolist(),
-                    #'target_otplan_emd_sparse':   coo_tolist(otplan_emd_sparse, j),
-                    #'target_otplan_emd_dense':    otplan_emd_dense[j].tolist(),
+                    # 'target_otplan_emd_sparse':   coo_tolist(otplan_emd_sparse, j),
+                    # 'target_otplan_emd_dense':    otplan_emd_dense[j].tolist(),
                     'target_otplan_solve_dense':  otplan_solve_dense[j].tolist(),
-                    'target_otplan_solve_sparse': coo_tolist(otplan_solve_sparse, j)
+                    'target_otplan_solve_sparse': coo_tolist(otplan_solve_sparse, j),
                 }
+
+                # Only add one-hot cost encoding for the semivariable case
+                if cost_type == 'semivariable':
+                    sample['input_cost'] = metric_one_hot
+
+                yield sample
+
         else:
             input_total = torch.hstack((
                 source_tensor,
