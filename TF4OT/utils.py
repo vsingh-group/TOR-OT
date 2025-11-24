@@ -151,7 +151,7 @@ def get_model_name_from_cfg(cfg):
             f"_flash{cfg.model.use_flash_attention if cfg.model.use_flash_attention else 'False'}"
             f"_data{cfg.data.dataset.size_s}"
             f"{'_rowwise' if cfg.data.dataset.row_wise else ''}"
-            f"{'_costfixed' if cfg.data.dataset.cost_fixed else ''}"
+            f"_cost{cfg.data.dataset.input_cost_type}"
             f"_prec{cfg.tokenizer.DigitTokenizer.decimal_precision}"
             f"_bins{cfg.data.dataset.support_size}"
             f"_{'DigitTokenizer' if hasattr(cfg.tokenizer, 'DigitTokenizer') else 'IEEEFloatTokenizer'}"

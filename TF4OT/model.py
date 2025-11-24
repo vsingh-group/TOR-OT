@@ -105,6 +105,7 @@ class TokenRegressor_flash(nn.Module):
     """
     def __init__(self,
                  tokenizer,
+                 input_cost_type,
                  encoder_ab: nn.Module,
                  encoder_c: nn.Module = None,
                  emb_dim_ab: int = 128,
@@ -118,6 +119,7 @@ class TokenRegressor_flash(nn.Module):
         super().__init__()
 
         self.tokenizer  = tokenizer
+        self.cost_type  = input_cost_type
         self.encoder_ab = encoder_ab
         self.encoder_c  = encoder_c
         self.emb_dim_ab = emb_dim_ab
@@ -132,9 +134,15 @@ class TokenRegressor_flash(nn.Module):
         self.token_emb = nn.Embedding(self.tokenizer.vocab_size, self.emb_dim_d)#, padding_idx=tokenizer.pad_id)
         self.pos_emb   = nn.Embedding(self.max_seq_len, self.emb_dim_d)           # sequence dimension
         # projection layer to align concatenated prefix back to embedding dimension
-        if encoder_c is not None:
+        if self.cost_type == 'variable':
+            # cost variable
             self.prefix_proj = nn.Linear(self.emb_dim_ab + self.emb_dim_c, self.emb_dim_d)
-        else:
+        elif self.cost_type == 'semivariable':
+            # cost semivariable
+            dim_c_onehot = 10 # number of metrics
+            self.prefix_proj = nn.Linear(self.emb_dim_ab + dim_c_onehot, self.emb_dim_d)
+        elif self.cost_type == 'fixed':
+            # cost fixed
             self.prefix_proj = nn.Linear(self.emb_dim_ab, self.emb_dim_d)
 
         # stacked transformer blocks
@@ -181,13 +189,19 @@ class TokenRegressor_flash(nn.Module):
         prefix_ab = self.encoder_ab(encoder_input_ab)
         prefix_ab = prefix_ab.unsqueeze(1)
 
-        if encoder_input_c is not None:
+        if self.cost_type == 'semivariable':
+            # cost semivariable: one-hot encoder for cost - vector of 4 options
+            prefix_c = encoder_input_c
+            prefix_c = prefix_c.unsqueeze(1)
+            prefix = torch.cat([prefix_ab, prefix_c], dim=2)
+        elif self.cost_type == 'variable':
+            # cost variable: encoder for the variable - n*n cost matrix
             prefix_c = self.encoder_c(encoder_input_c)
             prefix_c = prefix_c.unsqueeze(1)
-            # concat prefix_ab and prefix_C along feature dim -> [B, 1, 2*units]
+            # concat prefix_ab and prefix_c along feature dim -> [B, 1, 2*units]
             prefix = torch.cat([prefix_ab, prefix_c], dim=2)
-
-        else:
+        elif self.cost_type == 'fixed':
+            # cost fixed
             prefix = prefix_ab  # [B, 1, units]
         # Project back to embedding dimension -> [B, 1, emb_dim_d]
         prefix = self.prefix_proj(prefix)
@@ -238,7 +252,7 @@ class TokenRegressor_flash(nn.Module):
             fill_value=-1,
             dtype=torch.long,
             device=encoder_input_ab.device
-       )
+        )
         print("Starting generation...")
         for i in range(self.max_seq_len):
             #print (f"Generating token {i+1}/{self.max_seq_len}", end='\r')
@@ -292,6 +306,7 @@ class TokenRegressor(nn.Module):
     """
     def __init__(self,
                  tokenizer,
+                 input_cost_type,
                  encoder_ab: nn.Module,
                  encoder_c: nn.Module = None,
                  emb_dim_ab: int = 128,
@@ -305,6 +320,7 @@ class TokenRegressor(nn.Module):
         super().__init__()
 
         self.tokenizer  = tokenizer
+        self.cost_type  = input_cost_type
         self.encoder_ab = encoder_ab
         self.encoder_c  = encoder_c
         self.emb_dim_ab = emb_dim_ab
@@ -315,8 +331,8 @@ class TokenRegressor(nn.Module):
         self.num_attention_heads    = num_attention_heads
         self.dropout = dropout
 
-        # token + positional embeddings))
-        self.token_emb = nn.Embedding(self.tokenizer.vocab_size, self.emb_dim_d)#, padding_idx=tokenizer.pad_id)
+        # token + positional embeddings
+        self.token_emb = nn.Embedding(self.tokenizer.vocab_size, self.emb_dim_d)  # padding_idx=tokenizer.pad_id
         self.pos_emb   = nn.Embedding(self.max_seq_len, self.emb_dim_d)           # sequence dimension
         # projection layer to align concatenated prefix back to embedding dimension
         if encoder_c is not None:
@@ -374,7 +390,6 @@ class TokenRegressor(nn.Module):
             prefix_c = prefix_c.unsqueeze(1)
             # concat prefix_ab and prefix_C along feature dim -> [B, 1, 2*units]
             prefix = torch.cat([prefix_ab, prefix_c], dim=2)
-
         else:
             prefix = prefix_ab  # [B, 1, units]
         # Project back to embedding dimension -> [B, 1, emb_dim_d]
@@ -425,7 +440,7 @@ class TokenRegressor(nn.Module):
             fill_value=-1,
             dtype=torch.long,
             device=encoder_input_ab.device
-       )
+        )
         print("Starting generation...")
         for i in range(self.max_seq_len):
             print (f"Generating token {i+1}/{self.max_seq_len}", end='\r')
@@ -479,6 +494,7 @@ class TokenRegressor_two_prefix_tokens(nn.Module):
     """
     def __init__(self,
                  tokenizer,
+                 input_cost_type,
                  encoder_ab:    nn.Module,
                  encoder_c:     nn.Module = None,
                  emb_dim_ab:    int = 128,
@@ -487,11 +503,13 @@ class TokenRegressor_two_prefix_tokens(nn.Module):
                  max_seq_len:   int = 1024,
                  num_transformer_layers: int = 1,
                  num_attention_heads:    int = 1,
-                 dropout: float = 0.0):
+                 dropout: float = 0.0,
+                 ):
 
         super().__init__()
 
         self.tokenizer  = tokenizer
+        self.cost_type  = input_cost_type
         self.encoder_ab = encoder_ab
         self.encoder_c  = encoder_c
         self.emb_dim_ab = emb_dim_ab

@@ -129,19 +129,20 @@ def training_routine(rank, cfg):
 
     # Create ENCODERS
     logger.info("Creating Encoders")
-
+    input_cost_type = cfg.data.dataset.input_cost_type
     encoder_ab = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_ab.input_dim, cfg.model.encoder.encoder_ab.emb_dim_ab),
                                 nn.GELU(),
                                 nn.Linear(cfg.model.encoder.encoder_ab.emb_dim_ab, cfg.model.encoder.encoder_ab.emb_dim_ab)
                                 )
     encoder_ab.to(device)
-    if not cfg.data.dataset.cost_fixed:
+    if input_cost_type == 'variable':
         encoder_c = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_c.input_dim, cfg.model.encoder.encoder_c.emb_dim_c),
                                     nn.GELU(),
                                     nn.Linear(cfg.model.encoder.encoder_c.emb_dim_c, cfg.model.encoder.encoder_c.emb_dim_c)
                                     )
         encoder_c.to(device)
-    else: encoder_c = None
+    else: # 'semivariable' or 'fixed' case
+        encoder_c = None
 
     # Create TOKENIZER
     logger.info("Creating Tokenizer")
@@ -165,6 +166,7 @@ def training_routine(rank, cfg):
     if num_prefix == 1:
         if cfg.model.use_flash_attention:
             pytorch_model = model.TokenRegressor_flash(tokenizer,
+                                             input_cost_type=input_cost_type,
                                              encoder_ab=encoder_ab,
                                              encoder_c=encoder_c,
                                              emb_dim_ab=cfg.model.encoder.encoder_ab.emb_dim_ab,
@@ -173,10 +175,11 @@ def training_routine(rank, cfg):
                                              max_seq_len=cfg.model.decoder.max_seq_len,
                                              num_transformer_layers=cfg.model.decoder.num_transformer_layers,
                                              num_attention_heads=cfg.model.decoder.num_attention_heads,
-                                             dropout=cfg.model.decoder.dropout
+                                             dropout=cfg.model.decoder.dropout,
                                              ).to(device)
         else:
             pytorch_model = model.TokenRegressor(tokenizer,
+                                                input_cost_type=input_cost_type,
                                                 encoder_ab=encoder_ab,
                                                 encoder_c=encoder_c,
                                                 emb_dim_ab=cfg.model.encoder.encoder_ab.emb_dim_ab,
@@ -185,19 +188,20 @@ def training_routine(rank, cfg):
                                                 max_seq_len=cfg.model.decoder.max_seq_len,
                                                 num_transformer_layers=cfg.model.decoder.num_transformer_layers,
                                                 num_attention_heads=cfg.model.decoder.num_attention_heads,
-                                                dropout=cfg.model.decoder.dropout
+                                                dropout=cfg.model.decoder.dropout,
                                                 ).to(device)
     else:
         pytorch_model = model.TokenRegressor_two_prefix_tokens(tokenizer,
+                                            input_cost_type=input_cost_type,
                                             encoder_ab=encoder_ab,
                                             encoder_c=encoder_c,
-                                            emb_dim_ab=cfg.model.encoder.encoder_ab.emb_dim_ab,
+                                            emb_dim_ab=cfg.model.encoder.encoder_axb.emb_dim_ab,
                                             emb_dim_c=cfg.model.encoder.encoder_c.emb_dim_c,
                                             emb_dim_d=cfg.model.decoder.emb_dim_d,
                                             max_seq_len=cfg.model.decoder.max_seq_len,
                                             num_transformer_layers=cfg.model.decoder.num_transformer_layers,
                                             num_attention_heads=cfg.model.decoder.num_attention_heads,
-                                            dropout=cfg.model.decoder.dropout
+                                            dropout=cfg.model.decoder.dropout,
                                             ).to(device)
 
     pytorch_model.to(rank)
@@ -215,6 +219,7 @@ def training_routine(rank, cfg):
 
     # Main training loop
     OT_INPUT_TOTAL        = "input_total"
+    OT_INPUT_COST         = "input_cost"
     OT_INPUT_COST_MATRIX  = "input_cost_matrix"
     OT_TARGET_PLAN_MATRIX = "target_otplan_solve_sparse"
 
@@ -227,7 +232,7 @@ def training_routine(rank, cfg):
         unit="epoch",
         file=utils.TqdmToLogger(logger)
     )
-    
+
     # MAIN TRAINING LOOP
     for epoch in range(cfg.training.num_epochs):
         train_loader.sampler.set_epoch(epoch)
@@ -241,9 +246,13 @@ def training_routine(rank, cfg):
 
             # Only build cost prefix input if cost is variable
             encoder_input_c_flat = None
-            if not cfg.data.dataset.cost_fixed:
-                encoder_input_c      = batch[OT_INPUT_COST_MATRIX]                  # [B, n_bins, n_bins]
+            if input_cost_type == 'variable':
+                encoder_input_c      = batch[OT_INPUT_COST_MATRIX]                      # [B, n_bins, n_bins]
                 encoder_input_c_flat = encoder_input_c.flatten(start_dim=1).to(device)  # [B, n_bins*n_bins]
+            elif input_cost_type == 'semivariable':
+                encoder_input_c_flat = batch[OT_INPUT_COST]
+            elif input_cost_type == 'fixed':
+                encoder_input_c_flat = None
 
             # -------------------------
             # Tokenizer-side inputs
@@ -268,10 +277,10 @@ def training_routine(rank, cfg):
             # Forward pass
             # -------------------------
             text_pred = pytorch_model.forward(
-                encoder_input_ab=encoder_input_ab,
-                decoded_ids=text_input,
-                encoder_input_c=encoder_input_c_flat if not cfg.data.dataset.cost_fixed else None,
-                pad_mask=pad_mask
+                encoder_input_ab = encoder_input_ab,
+                decoded_ids      = text_input,
+                encoder_input_c  = encoder_input_c_flat,
+                pad_mask         = pad_mask
             )  # [B, L_pred, V] where L_pred = n_prefix + L_dec
 
             L_pred = text_pred.size(1)

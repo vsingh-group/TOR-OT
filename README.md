@@ -41,7 +41,7 @@ CUDA_VISIBLE_DEVICES=4,5,6,7 python3 -m TF4OT.run_training --config-name TF_100K
 
 ### Run inference (gpu)
 ```bash
-CUDA_VISIBLE_DEVICES=7 python3 -m TF4OT.run_inference --config-name TF_100K_cost_fixed
+CUDA_VISIBLE_DEVICES=0 python3 -m TF4OT.run_inference --config-name TF_100K_cost_semivariable
 ```
 
 ### Run tests
@@ -52,7 +52,7 @@ python3 -m TF4OT.vocabs_test
 
 ### Run all experiments in the background
 ```bash
-./TF4OT/run_all.sh &
+nohup ./TF4OT/run_all.sh &
 ```
 
 ## 🌟 Citation

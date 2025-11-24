@@ -465,11 +465,11 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
     ).to(device)
 
     # Check if encoder_C exists in the config
-    
-    if cfg["data"]["dataset"]["cost_fixed"]:
+    input_cost_type = cfg["data"]["dataset"]["input_cost_type"] 
+    if input_cost_type == 'fixed' or input_cost_type == 'semivariable':
         encoder_c = None
         emb_dim_c = 0
-    else:
+    elif input_cost_type == 'variable':
         input_dim = cfg["model"]["encoder"]["encoder_c"]["input_dim"]
         emb_dim_c = cfg["model"]["encoder"]["encoder_c"]["emb_dim_c"]
         encoder_c = nn.Sequential(
@@ -496,7 +496,8 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
     num_prefix = cfg["model"]["num_prefix_tokens"]
     if num_prefix == 1:
         if cfg["model"]["use_flash_attention"]:
-            pytorch_model = model.TokenRegressor_flash(tokenizer  = tokenizer,
+            pytorch_model = model.TokenRegressor_flash(tokenizer,
+                                             input_cost_type,
                                              encoder_ab = encoder_ab,
                                              encoder_c  = encoder_c,
                                              emb_dim_ab = emb_dim_ab,
@@ -508,7 +509,8 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
                                              dropout                = decoder_cfg.get("dropout", 0.0)
                                              ).to(device)
         else:
-            pytorch_model = model.TokenRegressor(tokenizer  = tokenizer,
+            pytorch_model = model.TokenRegressor(tokenizer,
+                                             input_cost_type,
                                              encoder_ab = encoder_ab,
                                              encoder_c  = encoder_c,
                                              emb_dim_ab = emb_dim_ab,
@@ -520,7 +522,8 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
                                              dropout                = decoder_cfg.get("dropout", 0.0)
                                              ).to(device)
     else:
-        pytorch_model = model.TokenRegressor_two_prefix_tokens(tokenizer=tokenizer,
+        pytorch_model = model.TokenRegressor_two_prefix_tokens(tokenizer,
+                                            input_cost_type,
                                             encoder_ab=encoder_ab,
                                             encoder_c=encoder_c,
                                             emb_dim_ab=emb_dim_ab,
@@ -877,7 +880,7 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
     n_bins      = cfg.data.dataset.support_size
     metric      = 'sqeuclidean'
     # check encoder C in config
-    cost_fixed  = cfg.data.dataset.cost_fixed
+    cost_type   = cfg.data.dataset.input_cost_type
     row_wise    = cfg.data.dataset.row_wise
 
     # Evaluate distribution pairs
@@ -890,13 +893,23 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         )
 
         # Define support points
-        if cost_fixed:
+        if cost_type == 'fixed':
             # fixed C case
             xs = np.zeros((n_bins, 2))
             xt = np.zeros((n_bins, 2))
-            xs[:, 0] = np.arange(n_bins, dtype=np.float32)
-            xt[:, 0] = np.arange(n_bins, dtype=np.float32)
-        else:
+            xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
+            xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
+        elif cost_type == 'semivariable':
+            xs = np.zeros((n_bins, 2))
+            xt = np.zeros((n_bins, 2))
+            xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
+            xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
+            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming']
+            # pick a random metric
+            metric = np.random.choice(possible_metrics)
+            # one-hot encode the chosen metric
+            metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
+        elif cost_type == 'variable':
             x_low  = 0; x_high = 10
             xs = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
             xt = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
@@ -929,8 +942,10 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
                 )).to(my_dtype_torch)
                 encoder_input_ab.append(input_total)
 
-                if not cost_fixed:
+                if cost_type == 'variable':
                     encoder_input_c.append(torch.tensor(C, dtype=my_dtype_torch).flatten(start_dim=0))
+                elif cost_type == 'semivariable':
+                    encoder_input_c.append(torch.tensor(metric_one_hot))
 
         # else:
         #     encoder_input_ab = torch.hstack((
@@ -944,10 +959,12 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         #         encoder_input_C  = torch.tensor(C, dtype=my_dtype_torch)
         #         encoder_input_C  = encoder_input_C.flatten(start_dim=0).to(device)
 
-        encoder_input_ab    = torch.stack(encoder_input_ab).to(device)
-        if cost_fixed:
+        encoder_input_ab = torch.stack(encoder_input_ab).to(device)
+        if cost_type == 'fixed':
             encoder_input_c = None
-        else:
+        elif cost_type == 'semivariable':
+            encoder_input_c = torch.stack(encoder_input_c).to(device)
+        elif cost_type == 'variable':
             encoder_input_c = torch.stack(encoder_input_c).to(device)
 
         # Run model INFERENCE
