@@ -104,10 +104,11 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             xt = np.zeros((n_bins, 2))
             xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
             xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
-            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'dice', 'kulczynski1', 'rogerstanimoto', 'russellrao', 'wminkowski', 'yule']
+            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
             # pick a random metric
             metric = np.random.choice(possible_metrics)
             # one-hot encode the chosen metric
+            #print("metric:", metric)
             metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
             C = ot.dist(xs, xt, metric=metric)
             C /= C.max()

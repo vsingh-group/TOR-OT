@@ -139,7 +139,8 @@ class TokenRegressor_flash(nn.Module):
             self.prefix_proj = nn.Linear(self.emb_dim_ab + self.emb_dim_c, self.emb_dim_d)
         elif self.cost_type == 'semivariable':
             # cost semivariable
-            dim_c_onehot = 10 # number of metrics
+            dim_c_onehot = 8 # number of metrics
+            # from run_datagenerator: possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
             self.prefix_proj = nn.Linear(self.emb_dim_ab + dim_c_onehot, self.emb_dim_d)
         elif self.cost_type == 'fixed':
             # cost fixed
