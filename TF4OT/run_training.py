@@ -115,7 +115,7 @@ def training_routine(rank, cfg):
 
     # init logging (file only on rank 0)
     utils.setup_logging(log_full_path, rank)
-    
+
     logger.info(f"Auto-generated model name: {model_name}")
     logger.info(f"Model will be saved to: {model_full_path}")
     logger.info(f"Training log will be saved to: {log_full_path}")
@@ -133,15 +133,21 @@ def training_routine(rank, cfg):
     encoder_ab = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_ab.input_dim, cfg.model.encoder.encoder_ab.emb_dim_ab),
                                 nn.GELU(),
                                 nn.Linear(cfg.model.encoder.encoder_ab.emb_dim_ab, cfg.model.encoder.encoder_ab.emb_dim_ab)
-                                )
+                              )
     encoder_ab.to(device)
     if input_cost_type == 'variable':
         encoder_c = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_c.input_dim, cfg.model.encoder.encoder_c.emb_dim_c),
                                     nn.GELU(),
                                     nn.Linear(cfg.model.encoder.encoder_c.emb_dim_c, cfg.model.encoder.encoder_c.emb_dim_c)
-                                    )
+                                 )
         encoder_c.to(device)
-    else: # 'semivariable' or 'fixed' case
+    elif input_cost_type == 'semivariable':
+        encoder_c = nn.Sequential(nn.Linear(cfg.model.encoder.encoder_c.input_dim, cfg.model.encoder.encoder_c.emb_dim_c),
+                                    nn.GELU(),
+                                    nn.Linear(cfg.model.encoder.encoder_c.emb_dim_c, cfg.model.encoder.encoder_c.emb_dim_c)
+                                 )
+        encoder_c.to(device)
+    elif input_cost_type == 'fixed':
         encoder_c = None
 
     # Create TOKENIZER

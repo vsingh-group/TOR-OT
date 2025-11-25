@@ -3,7 +3,7 @@ source ~/anaconda3/etc/profile.d/conda.sh
 conda activate env_TF4OT
 
 # run all configs
-export CUDA_VISIBLE_DEVICES=0,2
+export CUDA_VISIBLE_DEVICES=0,3
 
 LOGDIR=./experiments/logs
 mkdir -p "$LOGDIR"
@@ -34,4 +34,4 @@ mkdir -p "$LOGDIR"
 
 # semivariable cost
 python3 -m TF4OT.run_training  --config-name TF_1M_cost_semivariable  > $LOGDIR/train_TF_1M_cost_semivariable.log 2>&1 && \
-python3 -m TF4OT.run_inference --config-name TF_1M_cost_semivariable  > $LOGDIR/eval_TF_1M_cost_semivariable.log 2>&1
+python3 -m TF4OT.run_inference --config-name TF_1M_cost_semivariable  > $LOGDIR/eval_TF_1M_cost_semivariable.log  2>&1

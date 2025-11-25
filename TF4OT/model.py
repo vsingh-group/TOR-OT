@@ -130,8 +130,8 @@ class TokenRegressor_flash(nn.Module):
         self.num_attention_heads    = num_attention_heads
         self.dropout = dropout
 
-        # token + positional embeddings))
-        self.token_emb = nn.Embedding(self.tokenizer.vocab_size, self.emb_dim_d)#, padding_idx=tokenizer.pad_id)
+        # token + positional embeddings
+        self.token_emb = nn.Embedding(self.tokenizer.vocab_size, self.emb_dim_d)  # padding_idx=tokenizer.pad_id
         self.pos_emb   = nn.Embedding(self.max_seq_len, self.emb_dim_d)           # sequence dimension
         # projection layer to align concatenated prefix back to embedding dimension
         if self.cost_type == 'variable':
@@ -139,9 +139,7 @@ class TokenRegressor_flash(nn.Module):
             self.prefix_proj = nn.Linear(self.emb_dim_ab + self.emb_dim_c, self.emb_dim_d)
         elif self.cost_type == 'semivariable':
             # cost semivariable
-            dim_c_onehot = 8 # number of metrics
-            # from run_datagenerator: possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
-            self.prefix_proj = nn.Linear(self.emb_dim_ab + dim_c_onehot, self.emb_dim_d)
+            self.prefix_proj = nn.Linear(self.emb_dim_ab + self.emb_dim_c, self.emb_dim_d)
         elif self.cost_type == 'fixed':
             # cost fixed
             self.prefix_proj = nn.Linear(self.emb_dim_ab, self.emb_dim_d)
@@ -191,8 +189,8 @@ class TokenRegressor_flash(nn.Module):
         prefix_ab = prefix_ab.unsqueeze(1)
 
         if self.cost_type == 'semivariable':
-            # cost semivariable: one-hot encoder for cost - vector of 4 options
-            prefix_c = encoder_input_c
+            # cost semivariable: encoder for one-hot cost vector
+            prefix_c = self.encoder_c(encoder_input_c)
             prefix_c = prefix_c.unsqueeze(1)
             prefix = torch.cat([prefix_ab, prefix_c], dim=2)
         elif self.cost_type == 'variable':

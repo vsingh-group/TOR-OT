@@ -148,7 +148,7 @@ def inference_routine(cfg):
 
             text_pred_dense = [sparse_row_string_to_dense_string(t, cfg.data.dataset.support_size, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
             ot_pred_dense   = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
-            ot_pred_dense_np = ot_pred_dense.copy()  # Keep numpy version for visualization
+            ot_pred_dense_np= ot_pred_dense.copy()  # Keep numpy version for visualization
             ot_pred_dense   = torch.tensor(ot_pred_dense, dtype=my_dtype_torch)
             ot_pred_sparse  = sparse.coo_matrix(ot_pred_dense)
 
@@ -456,26 +456,34 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
         raise ValueError("Unknown tokenizer configuration")
 
     # Rebuild encoder
-    input_dim  = cfg["model"]["encoder"]["encoder_ab"]["input_dim"]
-    emb_dim_ab = cfg["model"]["encoder"]["encoder_ab"]["emb_dim_ab"]
-    encoder_ab = nn.Sequential(
-        nn.Linear(input_dim, emb_dim_ab),
-        nn.GELU(),
-        nn.Linear(emb_dim_ab, emb_dim_ab)
-    ).to(device)
+    ab_input_dim = cfg["model"]["encoder"]["encoder_ab"]["input_dim"]
+    ab_emb_dim   = cfg["model"]["encoder"]["encoder_ab"]["emb_dim_ab"]
+    ab_encoder   = nn.Sequential(
+                    nn.Linear(ab_input_dim, ab_emb_dim),
+                    nn.GELU(),
+                    nn.Linear(ab_emb_dim, ab_emb_dim)
+                   ).to(device)
 
     # Check if encoder_C exists in the config
-    input_cost_type = cfg["data"]["dataset"]["input_cost_type"] 
-    if input_cost_type == 'fixed' or input_cost_type == 'semivariable':
-        encoder_c = None
-        emb_dim_c = 0
-    elif input_cost_type == 'variable':
-        input_dim = cfg["model"]["encoder"]["encoder_c"]["input_dim"]
-        emb_dim_c = cfg["model"]["encoder"]["encoder_c"]["emb_dim_c"]
-        encoder_c = nn.Sequential(
-            nn.Linear(input_dim, emb_dim_c),
+    input_cost_type = cfg["data"]["dataset"]["input_cost_type"]
+    if input_cost_type == 'fixed':
+        c_encoder = None
+        c_emb_dim = 0
+    elif input_cost_type == 'semivariable':
+        c_input_dim = cfg["model"]["encoder"]["encoder_c"]["input_dim"]
+        c_emb_dim   = cfg["model"]["encoder"]["encoder_c"]["emb_dim_c"]
+        c_encoder   = nn.Sequential(
+            nn.Linear(c_input_dim, c_emb_dim),
             nn.GELU(),
-            nn.Linear(emb_dim_c, emb_dim_c)
+            nn.Linear(c_emb_dim, c_emb_dim)
+        ).to(device)
+    elif input_cost_type == 'variable':
+        c_input_dim = cfg["model"]["encoder"]["encoder_c"]["input_dim"]
+        c_emb_dim   = cfg["model"]["encoder"]["encoder_c"]["emb_dim_c"]
+        c_encoder   = nn.Sequential(
+            nn.Linear(c_input_dim, c_emb_dim),
+            nn.GELU(),
+            nn.Linear(c_emb_dim, c_emb_dim)
         ).to(device)
 
     # Rebuild model using decoder config
@@ -498,10 +506,10 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
         if cfg["model"]["use_flash_attention"]:
             pytorch_model = model.TokenRegressor_flash(tokenizer,
                                              input_cost_type,
-                                             encoder_ab = encoder_ab,
-                                             encoder_c  = encoder_c,
-                                             emb_dim_ab = emb_dim_ab,
-                                             emb_dim_c  = emb_dim_c,
+                                             encoder_ab = ab_encoder,
+                                             encoder_c  = c_encoder,
+                                             emb_dim_ab = ab_emb_dim,
+                                             emb_dim_c  = c_emb_dim,
                                              emb_dim_d  = decoder_cfg["emb_dim_d"],
                                              max_seq_len= decoder_cfg["max_seq_len"],
                                              num_transformer_layers = decoder_cfg["num_transformer_layers"],
@@ -511,10 +519,10 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
         else:
             pytorch_model = model.TokenRegressor(tokenizer,
                                              input_cost_type,
-                                             encoder_ab = encoder_ab,
-                                             encoder_c  = encoder_c,
-                                             emb_dim_ab = emb_dim_ab,
-                                             emb_dim_c  = emb_dim_c,
+                                             encoder_ab = ab_encoder,
+                                             encoder_c  = c_encoder,
+                                             emb_dim_ab = ab_emb_dim,
+                                             emb_dim_c  = c_emb_dim,
                                              emb_dim_d  = decoder_cfg["emb_dim_d"],
                                              max_seq_len= decoder_cfg["max_seq_len"],
                                              num_transformer_layers = decoder_cfg["num_transformer_layers"],
@@ -524,10 +532,10 @@ def load_model_by_name(full_save_path: str, device: str = "cuda"):
     else:
         pytorch_model = model.TokenRegressor_two_prefix_tokens(tokenizer,
                                             input_cost_type,
-                                            encoder_ab=encoder_ab,
-                                            encoder_c=encoder_c,
-                                            emb_dim_ab=emb_dim_ab,
-                                            emb_dim_c=emb_dim_c,
+                                            encoder_ab=ab_encoder,
+                                            encoder_c=c_encoder,
+                                            emb_dim_ab=ab_emb_dim,
+                                            emb_dim_c=c_emb_dim,
                                             emb_dim_d=decoder_cfg["emb_dim_d"],
                                             max_seq_len=decoder_cfg["max_seq_len"],
                                             num_transformer_layers=decoder_cfg["num_transformer_layers"],
@@ -904,15 +912,17 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
             xt = np.zeros((n_bins, 2))
             xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
             xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
-            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming']
+            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
             # pick a random metric
             metric = np.random.choice(possible_metrics)
             # one-hot encode the chosen metric
             metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
         elif cost_type == 'variable':
-            x_low  = 0; x_high = 10
-            xs = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
-            xt = np.random.uniform(low=[x_low, x_low], high=[x_high, x_high], size=(n_bins, 2))
+            # n_bins defined elsewhere
+            x_low = 0; x_high = n_bins
+            # integers from [x_low, x_high) -> 0 to 9
+            xs = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
+            xt = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
 
         # Define cost matrix
         C = ot.dist(xs, xt, metric=metric)
@@ -1011,7 +1021,10 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
         # Titles
         axarr[0].set_title(f"Source $\\mu$ (1D)", fontsize=12)
         axarr[1].set_title(f"Target $\\nu$ (1D)", fontsize=12)
-        axarr[2].set_title("Cost Matrix", fontsize=12)
+        if cost_type == 'semivariable':
+            axarr[2].set_title(f"Cost Matrix: {metric}", fontsize=12)
+        else:
+            axarr[2].set_title("Cost Matrix: ", fontsize=12)
         axarr[3].set_title(r"$\pi$ Ground Truth (POT)", fontsize=12)
         axarr[4].set_title(r"$\hat{\pi}$ Model Prediction", fontsize=12)
         axarr[4].set_title(r"$\hat{\pi}$ Model Prediction", fontsize=12)
