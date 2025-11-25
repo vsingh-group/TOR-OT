@@ -100,7 +100,7 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             xs = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
             xt = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
             C = ot.dist(xs, xt, metric=metric)
-            C /= C.max()
+            C = C / C.max() # avoid casting errors later
         elif cost_type == 'semivariable':
             xs = np.zeros((n_bins, 2))
             xt = np.zeros((n_bins, 2))
