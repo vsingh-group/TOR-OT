@@ -1126,7 +1126,7 @@ def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer
     logger.info("="*80)
     table_str_terminal = tabulate(table_data, headers=headers, tablefmt='grid', floatfmt=".3e")
     logger.info("\n" + table_str_terminal)
-    
+
     # Create Jupyter notebook with results
     logger.info("\n" + "="*80)
     logger.info("Creating Jupyter notebook with results")
