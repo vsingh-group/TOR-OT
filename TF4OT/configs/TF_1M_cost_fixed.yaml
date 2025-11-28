@@ -14,21 +14,23 @@ defaults:
 
 data:
   hf_dataset:     "ivanjaenm/otdata_1M_rowwise_cost_fixed"
-#  hf_cache_dir:   "/data/ivan/datasets/hfcache"
-  hf_cache_dir:   "./home/moros2/hfcache"
+  hf_cache_dir:   "/data/ivan/datasets/hfcache"
+#  hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
     size_n:                1_000_000
     size_s:                '1M'
     support_size:          10
     input_total_dim:       21   # 2*support_size+1 -> row-wise
+    input_cost_type:       "fixed" # fixed, variable, semivariable
     input_cost_matrix_dim: 100  # support_size*support_size
     row_wise:              true
-    cost_fixed:            true
   loading:
     num_workers:           20
 
 model:
   save_path:      "./experiments/cost_fixed"
+  num_prefix_tokens:   1
+  use_flash_attention: true  
 #   encoder:
 #   # encoder for distributions source:a and target:b
 #     encoder_ab: 
@@ -49,7 +51,7 @@ model:
 #     dropout:                0
 
 training:
-  num_epochs:            10
+  num_epochs:            50
   batch_size_per_device: 128
   learning_rate:         1e-4
   use_amp:               false

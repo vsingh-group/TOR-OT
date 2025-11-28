@@ -140,7 +140,7 @@ def sparse_mse(A: sparse.coo_matrix, B: sparse.coo_matrix) -> float:
     
     return float(sq_norm) / nnz
 
-def get_model_name_from_cfg(cfg):
+def get_subfolder_name_from_cfg(cfg):
     return (
             f"model_dim{cfg.model.decoder.emb_dim_d}"
             f"_context{cfg.model.decoder.max_seq_len}"

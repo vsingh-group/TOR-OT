@@ -98,20 +98,21 @@ def training_routine(rank, cfg):
     torch.backends.cuda.matmul.allow_tf32 = True  # optional, faster on Ampere+
     use_amp = bool(getattr(cfg.training, "use_amp", True) and device.type == "cuda")
 
-    # Create descriptive model name
+    # Create descriptive folder name
     # if cfg.model.name is not defined then create a new name:
     name = cfg.model["name"] if "name" in cfg.model else None
     if name: model_name = f"{name}.pth"
-    else: model_name = utils.get_model_name_from_cfg(cfg)
+    else: model_name = "model"
 
     # Set default directory if not provided
     os.makedirs(cfg.model.save_path, exist_ok=True)
+    subfolder_name = utils.get_subfolder_name_from_cfg(cfg)
 
     # Combine directory with auto-generated filename
-    save_dir         = os.path.join(cfg.model.save_path, model_name)
+    save_dir         = os.path.join(cfg.model.save_path, subfolder_name)
     model_full_path  = os.path.join(save_dir, model_name + ".pth")
-    log_full_path    = os.path.join(save_dir, model_name + ".log")
-    config_yaml_path = os.path.join(save_dir, model_name + ".yaml")
+    log_full_path    = os.path.join(save_dir, "log_training.log")
+    config_yaml_path = os.path.join(save_dir, "config.yaml")
 
     # init logging (file only on rank 0)
     utils.setup_logging(log_full_path, rank)
