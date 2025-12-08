@@ -1,4 +1,4 @@
-# TF4OT: Transformers for Optimal Transport.
+# TOT: Transformers for Optimal Transport.
 ### Code for the paper: _"Transformers learn to approximately solve Optimal Transport"_.
 
 ## ⚙️ Python Environment Setup

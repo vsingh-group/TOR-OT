@@ -631,8 +631,43 @@ class MyDigitTokenizer:
     def from_tokens(self, token_ids):
         token_ids = np.array(token_ids.cpu().numpy())
         texts = [''.join([self.ids_mapping.get(t, '') for t in tokens]) for tokens in token_ids]
-
         return texts
+
+    def from_tokens_parallel(self, token_ids):
+        # Work directly with tensor, no numpy conversion
+        texts = []
+        num_rows = token_ids.shape[0]
+
+        # Create a lookup list for vectorized access (max ID + 1 to cover all possible IDs)
+        max_id = token_ids.max().item() if token_ids.numel() > 0 else -1
+        lookup_size = max(max_id + 1, len(self.ids_mapping))
+        lookup_list = [self.ids_mapping.get(i, '') for i in range(lookup_size)]
+
+        # Process every 10 rows in batches
+        for i in range(0, num_rows, 10):
+            # Get the next 10 rows (or remaining rows if less than 10)
+            row_group = token_ids[i:i+10]
+            num_rows_in_group = row_group.shape[0]
+
+            # Flatten all IDs in the group for parallel processing
+            flat_ids = row_group.flatten().cpu().tolist()
+
+            # Vectorized mapping: map all IDs to characters in parallel
+            # Direct indexing with bounds check for safety
+            mapped_chars = [lookup_list[idx] if 0 <= idx < lookup_size else '' for idx in flat_ids]
+            
+            # Reshape back to rows and join characters into strings
+            seq_len = row_group.shape[1] if len(row_group.shape) > 1 else len(mapped_chars) // num_rows_in_group
+            group_texts = []
+            for row_idx in range(num_rows_in_group):
+                start_idx = row_idx * seq_len
+                end_idx = start_idx + seq_len
+                row_chars = mapped_chars[start_idx:end_idx]
+                group_texts.append(''.join(row_chars))
+            
+            texts.append(group_texts)
+        
+        return texts      
 
 class MyIEEETokenizer:
     """

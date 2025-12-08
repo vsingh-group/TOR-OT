@@ -4,7 +4,7 @@
 # Override the defaults
 defaults:
   - data:       default
-  - model:      small
+  - model:      tiny
   - training:   default
   - tokenizer:  default
   - logging:    default
@@ -21,7 +21,7 @@ data:
     support_size:          10
     input_total_dim:       21   # row-wise -> 2*support_size+1 
     input_cost_type:       "semivariable" # fixed, variable, semivariable
-    input_cost_matrix_dim: 100  # support_size*support_size
+    input_cost_matrix_dim: 8  # variable: support_size*support_size or semivariable: number of metrics used
     row_wise:              true
   loading:
     num_workers:           20
@@ -30,27 +30,10 @@ model:
   save_path:           "./experiments/cost_semivariable"
   num_prefix_tokens:   1
   use_flash_attention: true
-  # encoder:
-  # # encoder for distributions source:a and target:b
-  #   encoder_ab: 
-  #     #MLP encoder
-  #     input_dim:    ${data.dataset.input_total_dim}
-  #     emb_dim:      128
-  # # encoder for cost matrix
-  #   encoder_C:
-  #     #TF encoder
-  #     input_dim:    ${data.dataset.input_cost_matrix_dim}   # <-- link to feature_dim
-  #     emb_dim:      128
-  # decoder:
-  #   emb_dim:                128
-  #   seq_dim:                500
-  #   num_transformer_layers: 4
-  #   num_attention_heads:    4
-  #   dropout:                0
 
 training:
-  num_epochs:            25
-  batch_size_per_device: 3072
+  num_epochs:            100
+  batch_size_per_device: 3072 # tiny model
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1
@@ -73,5 +56,5 @@ inference:
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}
   batch_size:   ${data.dataset.support_size}
-  test_all_testset: false           # Set to true to test all testset examples
-  test_custom_distributions: true   # Set to true to run distribution pair tests
+  test_all_testset: true             # Set to true to test all testset examples
+  test_custom_distributions: false   # Set to true to run distribution pair tests

@@ -32,7 +32,13 @@ from hydra.utils import instantiate
 # Setup logging
 logger = logging.getLogger(__name__)
 
-row_wise = True
+OT_SOURCE_DIST         = "source_dist"
+OT_TARGET_DIST         = "target_dist"
+OT_INPUT_TOTAL         = "input_total"
+OT_INPUT_COST_ONEHOT   = "input_cost"
+OT_INPUT_COST_MATRIX   = "input_cost_matrix"
+OT_TARGET_PLAN_MATRIX_SPARSE  = "target_otplan_solve_sparse"
+OT_TARGET_PLAN_MATRIX_DENSE   = "target_otplan_solve_dense"
 
 def inference_routine(cfg):
     """
@@ -92,12 +98,6 @@ def inference_routine(cfg):
 
     # Create Tokenizer
     # TODO: add support for more tokenizers
-    OT_SOURCE_DIST         = "source_dist"
-    OT_TARGET_DIST         = "target_dist"
-    OT_INPUT_TOTAL         = "input_total"
-    OT_INPUT_COST_MATRIX   = "input_cost_matrix"
-    OT_TARGET_PLAN_MATRIX_SPARSE  = "target_otplan_solve_sparse"
-    OT_TARGET_PLAN_MATRIX_DENSE   = "target_otplan_solve_dense"
 
     # Run distribution pair tests if enabled
     if hasattr(cfg.inference, 'test_custom_distributions') and cfg.inference.test_custom_distributions:
@@ -110,22 +110,17 @@ def inference_routine(cfg):
     # Limit test batches if not testing full dataset
     if hasattr(cfg.inference, 'test_all_testset') and cfg.inference.test_all_testset:
         # all testset
-#        test_batches  = test_loader
-#        total_batches = len(test_loader)
+        #test_batches  = test_loader
+        #total_batches = len(test_loader)
         # only a small number of batches
-        test_batches  = itertools.islice(test_loader, 10)
-        total_batches = min(10, len(test_loader))
+        test_batches  = itertools.islice(test_loader, 100)
+        total_batches = min(100, len(test_loader))
 
         eval_all_testset(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path,
-                        test_batches=test_batches, total_batches=total_batches, device=device, model_name=model_name,
-                        OT_SOURCE_DIST=OT_SOURCE_DIST, OT_TARGET_DIST=OT_TARGET_DIST, 
-                        OT_INPUT_TOTAL=OT_INPUT_TOTAL, OT_INPUT_COST_MATRIX=OT_INPUT_COST_MATRIX,
-                        OT_TARGET_PLAN_MATRIX_DENSE=OT_TARGET_PLAN_MATRIX_DENSE)
+                        test_batches=test_batches, total_batches=total_batches, device=device, model_name=model_name)
 
 def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=None,
-                    test_batches=None, total_batches=None, device=None, model_name=None,
-                    OT_SOURCE_DIST=None, OT_TARGET_DIST=None, OT_INPUT_TOTAL=None,
-                    OT_INPUT_COST_MATRIX=None, OT_TARGET_PLAN_MATRIX_DENSE=None):
+                     test_batches=None, total_batches=None, device=None, model_name=None):
     """
     Evaluate all testset examples.
     """
@@ -138,13 +133,13 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
         model_name = "model"
 
     # Initialize lists to collect metrics and figures
-    all_mse_dense = []
-    all_mse_sparse = []
+    all_mse_dense   = []
+    all_mse_sparse  = []
     all_otcost_diff = []
     all_figures = []
     all_results = []
 
-    n_bins = cfg.data.dataset.support_size
+    n_bins     = cfg.data.dataset.support_size
     cost_type  = cfg.data.dataset.input_cost_type
 
     with torch.no_grad():
@@ -158,11 +153,14 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
             elif cost_type == 'variable':
                 encoder_input_c = batch[OT_INPUT_COST_MATRIX].flatten(start_dim=1).to(device)
             elif cost_type == 'semivariable':
-                encoder_input_c = batch[OT_INPUT_COST_MATRIX].flatten(start_dim=1).to(device)
+                encoder_input_c = batch[OT_INPUT_COST_ONEHOT].flatten(start_dim=1).to(device)            
             text_ids_pred = pytorch_model.generate(encoder_input_ab=encoder_input_ab,
-                                                   encoder_input_c=encoder_input_c, 
+                                                   encoder_input_c=encoder_input_c,
                                                    temperature=0.1)
+            # text_ids_pred.shape: (batch_size, max_seq_len)
             text_pred = tokenizer.from_tokens(text_ids_pred)
+            # text_pred.shape: (batch_size, )
+            # parse text in chunks of support_size
             text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
 
             text_pred_dense = [sparse_row_string_to_dense_string(t, cfg.data.dataset.support_size, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
@@ -196,9 +194,9 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
             # Store results for table
             all_results.append({
                 'batch_idx': batch_idx,
-                #'MSE diff dense': mse_diff_dense,
-                'MSE Diff (sparse)': mse_diff_sparse,
-                'OT Cost Diff': otcost_diff,
+                'mse_diff_dense': mse_diff_dense,
+                'mse_diff_sparse': mse_diff_sparse,
+                'otcost_diff': otcost_diff,
                 #'OT Cost GT': otcost_gt.item(),
                # 'OT Cost Pred': otcost_pred.item()
             })
@@ -295,8 +293,8 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
             })
     
     # Convert to numpy arrays for statistics
-    all_mse_dense = np.array(all_mse_dense)
-    all_mse_sparse = np.array(all_mse_sparse)
+    all_mse_dense   = np.array(all_mse_dense)
+    all_mse_sparse  = np.array(all_mse_sparse)
     all_otcost_diff = np.array(all_otcost_diff)
     
     # Print statistics
@@ -329,20 +327,20 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     logger.info(f"  Max:    {all_otcost_diff.max():.6e}")
     logger.info(f"  Std:    {all_otcost_diff.std():.6e}")
     logger.info("="*80 + "\n")
-    
+
     # Prepare summary table data
     table_data = []
     for r in all_results:
         table_data.append([
             r['batch_idx'],
-            f"{r['OT Cost Diff']:.3e}",
-            #f"{r['MSE diff dense']:.3e}",
-            f"{r['MSE Diff (sparse)']:.3e}",
+            f"{r['otcost_diff']:.3e}",
+            f"{r['mse_diff_dense']:.3e}",
+            f"{r['mse_diff_sparse']:.3e}",
             #f"{r['OT Cost GT']:.3e}",
             #f"{r['OT Cost Pred']:.3e}"
         ])
-    
-    headers = ['Batch', 'OT Cost Diff', 'MSE Diff (sparse)']
+
+    headers = ['Batch', 'OT Cost Diff', 'MSE Diff (dense)', 'MSE Diff (sparse)']
     
     # Print summary table to terminal
     logger.info("\n" + "="*80)
@@ -370,6 +368,13 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     
     # Add statistics summary
     stats_md = f"""## Summary Statistics
+
+### MSE Diff (dense)
+- **Mean:** {all_mse_dense.mean():.6e}
+- **Median:** {np.median(all_mse_dense):.6e}
+- **Min:** {all_mse_dense.min():.6e}
+- **Max:** {all_mse_dense.max():.6e}
+- **Std:** {all_mse_dense.std():.6e}
 
 ### MSE Sparse
 - **Mean:** {all_mse_sparse.mean():.6e}
@@ -1437,6 +1442,9 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
     # Evaluate distribution pairs in the matrix
     for metric in metrics:
         logger.info(f"Evaluating metric: {metric}")
+        all_results = []
+        all_figures = []
+
         for i in range(sampler_pairs_matrix.shape[0]):
             for j in range(sampler_pairs_matrix.shape[1]):
 

@@ -4,7 +4,7 @@
 # Override the defaults
 defaults:
   - data:       default
-  - model:      small
+  - model:      tiny
   - training:   default
   - tokenizer:  default
   - logging:    default
@@ -33,7 +33,7 @@ model:
 
 training:
   num_epochs:            100
-  batch_size_per_device: 2560
+  batch_size_per_device: 3072 # tiny model
   #batch_size_per_device: 256
   learning_rate:         1e-6
   use_amp:               false
@@ -56,5 +56,5 @@ inference:
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}
   batch_size:   ${data.dataset.support_size}
-  test_all_testset: false           # Set to true to test all testset examples
+  test_all_testset: true           # Set to true to test all testset examples
   test_custom_distributions: true   # Set to true to run distribution pair tests

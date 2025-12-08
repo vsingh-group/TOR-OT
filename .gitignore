@@ -1,7 +1,8 @@
 # experiments
 outputs/
 experiments/trained_models/
-
+../nohup.out
+nohup.out
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
