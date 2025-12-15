@@ -28,6 +28,8 @@ python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --dataset_
 python3 -m TF4OT.run_datagenerator --n_bins=10 --dataset_size=100_000 --upload --cost_semivariable --row_wise --output_dir=./_otdata_100K_rowwise_costsemivariable --repo_name='ivanjaenm/otdata_100K_rowwise_cost_semivariable'
 python3 -m TF4OT.run_datagenerator --n_bins=10 --dataset_size=100_000 --upload --cost_semivariable --output_dir=./_otdata_100K_costsemivariable --repo_name='ivanjaenm/otdata_100K_cost_semivariable'
 ```
+Metric options: ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
+
 
 ## 🚀 Training Pipeline Overview
 

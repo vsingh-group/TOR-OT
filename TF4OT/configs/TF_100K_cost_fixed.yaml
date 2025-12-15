@@ -12,14 +12,14 @@ defaults:
 
 # Override specific parameters
 data:
-  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_cost_fixed"
+  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
     size_n:                100_000
     size_s:                '100K'
-    support_size:          10
-    input_total_dim:       21      # row-wise -> 2*support_size+1
+    support_size:          30
+    input_total_dim:       61      # row-wise -> 2*support_size+1
     input_cost_type:       "fixed" # fixed, variable, semivariable
     input_cost_matrix_dim: 0       # support_size*support_size
     row_wise:              true
@@ -32,10 +32,10 @@ model:
   use_flash_attention: true
 
 training:
-  num_epochs:            100
+  num_epochs:            50
   #batch_size_per_device: 3712   # tiny model
   #batch_size_per_device: 3712   # small model
-  batch_size_per_device: 256   # medium model
+  batch_size_per_device: 192     # medium model
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1

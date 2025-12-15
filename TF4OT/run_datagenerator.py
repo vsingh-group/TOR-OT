@@ -81,16 +81,19 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
     target_dist /= target_dist.sum(axis=1, keepdims=True)
 
     # Define support points
+    possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
+    metric_one_hot = None
+
     # Fixed cost matrix case - same C for all samples
     if cost_type == 'fixed':
         xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
         xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
-        # Define cost matrix
+        metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
+        # Define cost matrix    
         C = ot.dist(xs, xt, metric=metric)
         C /= C.max()
 
     print("Computing optimal transport maps and yielding samples...")
-    metric_one_hot = None
     for i in tqdm(range(dataset_size), desc="Processing datasets"):
         # Variable cost matrix case
         if cost_type == 'variable':
@@ -106,7 +109,6 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             xt = np.zeros((n_bins, 2))
             xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
             xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
-            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
             # pick a random metric
             metric = np.random.choice(possible_metrics)
             # one-hot encode the chosen metric
@@ -153,8 +155,8 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
                     'target_dist':  target_tensor.tolist(),
                 }
                 # For semivariable, insert input_cost *before* input_cost_matrix
-                if cost_type == 'semivariable':
-                    sample['input_cost'] = metric_one_hot
+                #if cost_type == 'semivariable':
+                sample['input_cost']  = metric_one_hot
                 sample['input_cost_matrix'] = C.tolist()
                 sample['input_idx']   = input_idx
                 sample['input_total'] = input_total.tolist()

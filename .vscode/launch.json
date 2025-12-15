@@ -17,7 +17,8 @@
                 "CUDA_VISIBLE_DEVICES": "0"
             },
             "args": [
-                "--config-name", "TF_100K_cost_semivariable"
+                "--config-name",
+                "TF_100K_cost_semivariable"
             ]
         },
         {
@@ -30,12 +31,13 @@
             "python": "/home/ivan/anaconda3/envs/env_TF4OT/bin/python",
             "env": {
                 //"PYTHONPATH": "${workspaceFolder}",
-                "CUDA_VISIBLE_DEVICES": "0",
+                "CUDA_VISIBLE_DEVICES": "1",
                 //"CUDA_LAUNCH_BLOCKING":"1",
                 //"TORCH_SHOW_CPP_STACKTRACES":"1"
             },
             "args": [
-                "--config-name", "TF_100K_cost_semivariable"
+                "--config-name",
+                "TF_100K_cost_fixed"
             ]
         },
         {
@@ -50,10 +52,14 @@
                 "CUDA_VISIBLE_DEVICES": "7"
             },
             "args": [
-                "--n_bins", "10", 
-                "--dataset_size", "100_000", 
-                "--output_dir", "./ot_dataset",
-                "--repo_name", "ivanjaenm/ot_dataset_test"
+                "--n_bins",
+                "10",
+                "--dataset_size",
+                "100_000",
+                "--output_dir",
+                "./ot_dataset",
+                "--repo_name",
+                "ivanjaenm/ot_dataset_test"
             ]
         },
     ]

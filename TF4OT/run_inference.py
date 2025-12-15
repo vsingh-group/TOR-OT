@@ -11,7 +11,7 @@ import functools
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from sklearn.metrics import mean_squared_error
+import sklearn.metrics
 from scipy import sparse
 from tqdm import tqdm
 import numpy as np
@@ -101,10 +101,10 @@ def inference_routine(cfg):
 
     # Run distribution pair tests if enabled
     if hasattr(cfg.inference, 'test_custom_distributions') and cfg.inference.test_custom_distributions:
-        logger.info(f"\n{'='*80}")
-        logger.info("Starting distribution pair tests...")
+        logger.info(f"{'='*80}")
+        logger.info("Starting distribution pairs evaluation...")
         logger.info(f"{'='*80}\n")
-        test_1d_distribution_examples_all_pairs(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path)
+        eval_all_1d_distribution_pairs(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path)
         # test_1d_distribution_examples(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_name=model_name)
 
     # Limit test batches if not testing full dataset
@@ -113,8 +113,8 @@ def inference_routine(cfg):
         #test_batches  = test_loader
         #total_batches = len(test_loader)
         # only a small number of batches
-        test_batches  = itertools.islice(test_loader, 100)
-        total_batches = min(100, len(test_loader))
+        test_batches  = itertools.islice(test_loader, 1)
+        total_batches = min(1, len(test_loader))
 
         eval_all_testset(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path,
                         test_batches=test_batches, total_batches=total_batches, device=device, model_name=model_name)
@@ -133,14 +133,18 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
         model_name = "model"
 
     # Initialize lists to collect metrics and figures
-    all_mse_dense   = []
-    all_mse_sparse  = []
-    all_otcost_diff = []
-    all_figures = []
-    all_results = []
+    all_mae_sparse       = []
+    all_mape_sparse      = []
+    all_hellinger_sparse = []
+    all_otcost_diff      = []
+    all_tv_sparse        = []
+    all_figures          = []
+    all_results          = []
 
     n_bins     = cfg.data.dataset.support_size
     cost_type  = cfg.data.dataset.input_cost_type
+    batch_size = cfg.inference.batch_size
+    fig_counter= 0
 
     with torch.no_grad():
         pbar = tqdm(test_batches, total=total_batches)
@@ -153,173 +157,218 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
             elif cost_type == 'variable':
                 encoder_input_c = batch[OT_INPUT_COST_MATRIX].flatten(start_dim=1).to(device)
             elif cost_type == 'semivariable':
-                encoder_input_c = batch[OT_INPUT_COST_ONEHOT].flatten(start_dim=1).to(device)            
+                encoder_input_c = batch[OT_INPUT_COST_ONEHOT].flatten(start_dim=1).to(device)
             text_ids_pred = pytorch_model.generate(encoder_input_ab=encoder_input_ab,
                                                    encoder_input_c=encoder_input_c,
                                                    temperature=0.1)
             # text_ids_pred.shape: (batch_size, max_seq_len)
-            text_pred = tokenizer.from_tokens(text_ids_pred)
-            # text_pred.shape: (batch_size, )
+            text_pred_list = tokenizer.from_tokens(text_ids_pred)
+            # len(text_pred_list): batch_size
             # parse text in chunks of support_size
-            text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
+            text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred_list]
 
-            text_pred_dense = [sparse_row_string_to_dense_string(t, cfg.data.dataset.support_size, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
-            ot_pred_dense   = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
-            ot_pred_dense_np= ot_pred_dense.copy()  # Keep numpy version for visualization
-            ot_pred_dense   = torch.tensor(ot_pred_dense, dtype=my_dtype_torch)
-            ot_pred_sparse  = sparse.coo_matrix(ot_pred_dense)
+            text_pred_dense = [utils.parse_predicted_sparse_row_string(t, cfg.data.dataset.support_size, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
+            ot_pred_dense_batch   = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
+            ot_pred_dense_batch   = torch.from_numpy(ot_pred_dense_batch).to(dtype=my_dtype_torch)
 
-            ot_target_batch  = batch[OT_TARGET_PLAN_MATRIX_DENSE]
-            ot_target_dense  = ot_target_batch
-            ot_target_dense_np = ot_target_dense.cpu().numpy()  # Keep numpy version for visualization
-            ot_target_sparse = sparse.coo_matrix(ot_target_dense)
+            # loop over batch (rows)
+            for k in range(0, batch_size, n_bins):
+                print("processing item", k)
+                start = k
+                end   = min(k + n_bins, batch_size)
 
-            # Calculate MSE diff
-            mse_diff_dense  = mean_squared_error(ot_target_dense.flatten(), ot_pred_dense.flatten())
-            mse_diff_sparse = utils.sparse_mse(ot_target_sparse, ot_pred_sparse)
+                ot_pred_dense   = ot_pred_dense_batch[start:end].detach()
+                ot_pred_sparse  = sparse.coo_matrix(ot_pred_dense.cpu().numpy())
 
-            # Calculate OT cost diff
-            C = batch[OT_INPUT_COST_MATRIX][0]
-            C = C.detach().clone().to(dtype=my_dtype_torch)
-            C_np = C.cpu().numpy()  # Keep numpy version for visualization
-            otcost_gt     = (ot_target_dense * C).sum()
-            otcost_pred   = (ot_pred_dense   * C).sum()
-            otcost_diff   = abs(otcost_pred - otcost_gt).item()
+                ot_target_dense  = batch[OT_TARGET_PLAN_MATRIX_DENSE][start:end]
+                ot_target_sparse = sparse.coo_matrix(ot_target_dense.cpu().numpy())
 
-            # Collect metrics
-            all_mse_dense.append(mse_diff_dense)
-            all_mse_sparse.append(mse_diff_sparse)
-            all_otcost_diff.append(otcost_diff)
+                # Calculate MAE
+                mae_sparse  = utils.sparse_mean_abs_error(ot_target_sparse, ot_pred_sparse)
+                # Calculate MAPE
+                mape_sparse = utils.sparse_mean_abs_percentage_error(ot_target_sparse, ot_pred_sparse)
+                # Calculate Hellinger
+                hellinger_sparse = utils.sparse_hellinger_distance(ot_target_sparse, ot_pred_sparse)
+                # Calculate Total Variation
+                tv_sparse = utils.sparse_total_variation(ot_target_sparse, ot_pred_sparse)
+                # Calculate OT cost diff
+                C = batch[OT_INPUT_COST_MATRIX][k]
+                otcost_gt     = (ot_target_dense * C).sum()
+                otcost_pred   = (ot_pred_dense   * C).sum()
+                otcost_diff   = abs(otcost_pred - otcost_gt).item()
 
-            # Store results for table
-            all_results.append({
-                'batch_idx': batch_idx,
-                'mse_diff_dense': mse_diff_dense,
-                'mse_diff_sparse': mse_diff_sparse,
-                'otcost_diff': otcost_diff,
-                #'OT Cost GT': otcost_gt.item(),
-               # 'OT Cost Pred': otcost_pred.item()
-            })
+                # Collect metrics
+                all_mae_sparse.append(mae_sparse)
+                all_mape_sparse.append(mape_sparse)
+                all_hellinger_sparse.append(hellinger_sparse)
+                all_otcost_diff.append(otcost_diff)
+                all_tv_sparse.append(tv_sparse)
 
-            # Create visualization for first sample in batch
-            source = batch[OT_SOURCE_DIST][0].cpu().numpy()
-            target = batch[OT_TARGET_DIST][0].cpu().numpy()
-
-            # Only create figures for first few batches to avoid memory issues
-            if batch_idx < min(20, total_batches):
-                fig, axarr = plt.subplots(1, 5, figsize=(18, 3.5), dpi=120)
-                fig.suptitle(f"Batch {batch_idx}", fontsize=16, y=1.02)
-
-                # Titles
-                axarr[0].set_title(f"Source $\\mu$", fontsize=12)
-                axarr[1].set_title(f"Target $\\nu$", fontsize=12)
-                axarr[2].set_title("Cost Matrix", fontsize=12)
-                axarr[3].set_title(r"$\hat{\pi}$ Model Prediction", fontsize=12)
-                axarr[4].set_title(r"$\pi$ Ground Truth", fontsize=12)
-
-                # Common vmin/vmax for OT plans
-                vmin = 0
-                vmax = max(np.max(ot_pred_dense_np[0]), np.max(ot_target_dense_np[0]))
-
-                # --- Source (bar) ---
-                bin_edges = np.arange(len(source) + 1)
-                axarr[0].bar(
-                    bin_edges[:-1], source,
-                    width=1.0, color="tab:blue", alpha=0.7, edgecolor="black"
-                )
-                axarr[0].set_xlim(0, len(source))
-                axarr[0].set_ylim(0, max(source.max(), target.max()) * 1.1)
-                axarr[0].set_xlabel("Bin index")
-                axarr[0].set_ylabel("Probability")
-                
-                # --- Target (bar) ---
-                bin_edges = np.arange(len(target) + 1)
-                axarr[1].bar(
-                    bin_edges[:-1], target,
-                    width=1.0, color="tab:blue", alpha=0.7, edgecolor="black"
-                )
-                axarr[1].set_xlim(0, len(target))
-                axarr[1].set_ylim(0, max(source.max(), target.max()) * 1.1)
-                axarr[1].set_xlabel("Bin index")
-                axarr[1].set_ylabel("Probability")
-                
-                # --- Cost matrix ---
-                im2 = axarr[2].imshow(C_np, cmap='Blues', origin='lower', aspect="auto")
-                axarr[2].set_xlabel("Target bins")
-                axarr[2].set_ylabel("Source bins")
-                plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
-                
-                # --- Model Prediction ---
-                im3 = axarr[3].imshow(ot_pred_dense.cpu().numpy(), cmap='Reds', vmin=vmin, vmax=vmax, 
-                                     origin='lower', aspect="auto")
-                axarr[3].set_xlabel("Target bins")
-                axarr[3].set_ylabel("Source bins")
-                axarr[3].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_pred_sparse.sum():.5f}$', 
-                             transform=axarr[3].transAxes, fontsize=10,
-                             verticalalignment='top', bbox=dict(boxstyle='round', 
-                             facecolor='white', alpha=0.8))
-                plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
-
-                # --- Ground truth ---
-                im4 = axarr[4].imshow(ot_target_dense.cpu().numpy(), cmap='Blues', vmin=vmin, vmax=vmax, 
-                                     origin='lower', aspect="auto")
-                axarr[4].set_xlabel("Target bins")
-                axarr[4].set_ylabel("Source bins")
-                axarr[4].text(0.02, 0.98, rf'$\sum \pi = {ot_target_sparse.sum():.5f}$', 
-                             transform=axarr[4].transAxes, fontsize=10,
-                             verticalalignment='top', bbox=dict(boxstyle='round', 
-                             facecolor='white', alpha=0.8))
-                plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
-                
-                # Add error metrics text
-                fig.text(0.5, -0.02, f'MSE diff (sparse): {mse_diff_sparse:.3e}  |  ' + 
-                        f'OT Cost Diff: {otcost_diff:.3e}',
-                        ha='center', fontsize=11, bbox=dict(boxstyle='round', 
-                        facecolor='lightyellow', alpha=0.8))
-                
-                plt.tight_layout()
-                
-                # Store figure for notebook
-                all_figures.append({
-                    'fig': fig,
-                    'batch_idx': batch_idx
+                # Store results for table
+                all_results.append({
+                    'batch_idx': k,
+                    'mae_sparse': mae_sparse,
+                    'mape_sparse': mape_sparse,
+                    'hellinger_sparse': hellinger_sparse,
+                    'otcost_diff': otcost_diff,
+                    'tv_sparse': tv_sparse,
                 })
-            
-            # Update progress bar with current metrics
-            pbar.set_postfix({
-                'mse_dense': f'{mse_diff_dense:.6e}',
-                'mse_sparse': f'{mse_diff_sparse:.6e}',
-                'otcost_diff': f'{otcost_diff:.6e}'
-            })
-    
+
+                # Only create figures for first few batches to avoid memory issues
+                if fig_counter < min(20, batch_size):
+                    fig_counter += 1
+                    # Create visualization for first sample in batch
+                    source = batch[OT_SOURCE_DIST][k].cpu().numpy()
+                    target = batch[OT_TARGET_DIST][k].cpu().numpy()
+                    input_cost_onehot = batch[OT_INPUT_COST_ONEHOT][k].cpu().numpy()
+
+                    fig, axarr = plt.subplots(1, 5, figsize=(18, 3.5), dpi=120)
+                    fig.suptitle(f"Batch {k}", fontsize=16, y=1.02)
+
+                    # Titles
+                    metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
+                    metric = metrics[input_cost_onehot.argmax()]
+                    axarr[0].set_title(f"Source $\\mu$ (1D)", fontsize=12)
+                    axarr[1].set_title(f"Target $\\nu$ (1D)", fontsize=12)
+                    axarr[2].set_title(f"Cost Matrix: {metric}", fontsize=12)
+                    axarr[3].set_title(r"$\pi$ Ground Truth (POT)", fontsize=12)
+                    axarr[4].set_title(r"$\hat{\pi}$ Ours (TOT)", fontsize=12)
+
+                    # Common vmin/vmax for OT plans
+                    vmin = 0
+                    vmax = max(ot_pred_dense.max(), ot_target_dense.max()).item()
+
+                    # --- Source (bar) ---
+                    bin_edges = np.arange(len(source))
+                    axarr[0].bar(
+                        bin_edges, source,
+                        width=1.0, color="tab:blue", alpha=0.7, edgecolor="black", align="edge", linewidth=0.5
+                    )
+                    axarr[0].set_xlim(0, len(source))
+                    axarr[0].set_ylim(0, max(source.max(), target.max()) * 1.1)
+                    axarr[0].set_xlabel("Bin index")
+                    axarr[0].set_ylabel("Probability")
+                    
+                    # --- Target (bar) ---
+                    bin_edges = np.arange(len(target))
+                    axarr[1].bar(
+                        bin_edges, target,
+                        width=1.0, color="tab:blue", alpha=0.7, edgecolor="black", align="edge", linewidth=0.5
+                    )
+                    axarr[1].set_xlim(0, len(target))
+                    axarr[1].set_ylim(0, max(source.max(), target.max()) * 1.1)
+                    axarr[1].set_xlabel("Bin index")
+                    axarr[1].set_ylabel("Probability")
+                    
+                    # --- Cost matrix ---
+                    im2 = axarr[2].imshow(C, cmap='Blues', origin='lower', aspect="auto")
+                    axarr[2].set_xlabel("Target bins")
+                    axarr[2].set_ylabel("Source bins")
+                    plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
+
+                    # --- Ground truth ---
+                    im3 = axarr[3].imshow(ot_target_dense, cmap='Blues', vmin=vmin, vmax=vmax,
+                                        origin='lower', aspect="auto")
+                    axarr[3].set_xlabel("Target bins")
+                    axarr[3].set_ylabel("Source bins")
+                    axarr[3].text(0.02, 0.98, rf'$\sum \pi = {ot_target_sparse.sum():.5f}$',
+                                transform=axarr[3].transAxes, fontsize=10,
+                                verticalalignment='top', bbox=dict(boxstyle='round',
+                                facecolor='white', alpha=0.8))
+                    plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
+                    
+                    # --- Model Prediction ---
+                    im4 = axarr[4].imshow(ot_pred_dense, cmap='Reds', vmin=vmin, vmax=vmax,
+                                        origin='lower', aspect="auto")
+                    axarr[4].set_xlabel("Target bins")
+                    axarr[4].set_ylabel("Source bins")
+                    axarr[4].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_pred_sparse.sum():.5f}$',
+                                transform=axarr[4].transAxes, fontsize=10,
+                                verticalalignment='top', bbox=dict(boxstyle='round',
+                                facecolor='white', alpha=0.8))
+                    plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
+                    # Add error metrics text
+                    fig.text(0.5, -0.02, f'MAE (sparse): {mae_sparse:.3e}  |  ' +         
+                            f'MAPE (sparse): {mape_sparse:.3e}  |  ' +   
+                            f'OT Cost Diff: {otcost_diff:.3e}  |  ' +   
+                            f'Hellinger (sparse): {hellinger_sparse:.3e}  |  ' +
+                            f'TV (sparse): {tv_sparse:.3e}',
+                            ha='center', fontsize=11, bbox=dict(boxstyle='round',
+                            facecolor='lightyellow', alpha=0.8))
+
+                    plt.tight_layout()
+
+                    # Store figure for notebook
+                    all_figures.append({
+                        'fig': fig,
+                        'batch_idx': k
+                    })
+
+                # Update progress bar with current metrics
+                pbar.set_postfix({
+                    'mae_sparse': f'{mae_sparse:.6e}',
+                    'mape_sparse': f'{mape_sparse:.6e}',
+                    'hellinger_sparse': f'{hellinger_sparse:.6e}',
+                    'otcost_diff': f'{otcost_diff:.6e}',
+                    'tv_sparse': f'{tv_sparse:.6e}'
+                })
+
     # Convert to numpy arrays for statistics
-    all_mse_dense   = np.array(all_mse_dense)
-    all_mse_sparse  = np.array(all_mse_sparse)
-    all_otcost_diff = np.array(all_otcost_diff)
-    
+    all_mae_sparse       = np.array(all_mae_sparse)
+    all_mape_sparse      = np.array(all_mape_sparse)
+    all_hellinger_sparse = np.array(all_hellinger_sparse)
+    all_otcost_diff      = np.array(all_otcost_diff)
+    all_tv_sparse        = np.array(all_tv_sparse)
+
+    # Save all results to a numpy file
+    np.savez(
+        os.path.join(model_base_path, "eval_all_testset_results.npz"),
+        all_mae_sparse=all_mae_sparse,
+        all_mape_sparse=all_mape_sparse,
+        all_hellinger_sparse=all_hellinger_sparse,
+        all_otcost_diff=all_otcost_diff,
+        all_tv_sparse=all_tv_sparse
+    )
+
     # Print statistics
     logger.info("\n" + "="*80)
     logger.info("INFERENCE METRICS SUMMARY")
     logger.info("="*80)
-    logger.info(f"Number of batches evaluated: {len(all_mse_dense)}")
+    logger.info(f"Number of batches evaluated: {len(all_mae_sparse)}")
     logger.info("")
     
-    # logger.info("MSE Diff (dense):")
-    # logger.info(f"  Mean:   {all_mse_dense.mean():.6f}")
-    # logger.info(f"  Median: {np.median(all_mse_dense):.6f}")
-    # logger.info(f"  Min:    {all_mse_dense.min():.6f}")
-    # logger.info(f"  Max:    {all_mse_dense.max():.6f}")
-    # logger.info(f"  Std:    {all_mse_dense.std():.6f}")
-    # logger.info("")
-    
-    logger.info("MSE Diff (sparse):")
-    logger.info(f"  Mean:   {all_mse_sparse.mean():.6e}")
-    logger.info(f"  Median: {np.median(all_mse_sparse):.6e}")
-    logger.info(f"  Min:    {all_mse_sparse.min():.6e}")
-    logger.info(f"  Max:    {all_mse_sparse.max():.6e}")
-    logger.info(f"  Std:    {all_mse_sparse.std():.6e}")
+    logger.info("MAE (sparse):")
+    logger.info(f"  Mean:   {all_mae_sparse.mean():.6e}")
+    logger.info(f"  Median: {np.median(all_mae_sparse):.6e}")
+    logger.info(f"  Min:    {all_mae_sparse.min():.6e}")
+    logger.info(f"  Max:    {all_mae_sparse.max():.6e}")
+    logger.info(f"  Std:    {all_mae_sparse.std():.6e}")
     logger.info("")
     
+    logger.info("MAPE (sparse):")
+    logger.info(f"  Mean:   {all_mape_sparse.mean():.6e}")
+    logger.info(f"  Median: {np.median(all_mape_sparse):.6e}")
+    logger.info(f"  Min:    {all_mape_sparse.min():.6e}")
+    logger.info(f"  Max:    {all_mape_sparse.max():.6e}")
+    logger.info(f"  Std:    {all_mape_sparse.std():.6e}")
+    logger.info("="*80 + "\n")
+
+    logger.info("Hellinger (sparse):")
+    logger.info(f"  Mean:   {all_hellinger_sparse.mean():.6e}")
+    logger.info(f"  Median: {np.median(all_hellinger_sparse):.6e}")
+    logger.info(f"  Min:    {all_hellinger_sparse.min():.6e}")
+    logger.info(f"  Max:    {all_hellinger_sparse.max():.6e}")
+    logger.info(f"  Std:    {all_hellinger_sparse.std():.6e}")
+    logger.info("="*80 + "\n")
+
+    logger.info("TV (sparse):")
+    logger.info(f"  Mean:   {all_tv_sparse.mean():.6e}")
+    logger.info(f"  Median: {np.median(all_tv_sparse):.6e}")
+    logger.info(f"  Min:    {all_tv_sparse.min():.6e}")
+    logger.info(f"  Max:    {all_tv_sparse.max():.6e}")
+    logger.info(f"  Std:    {all_tv_sparse.std():.6e}")
+    logger.info("="*80 + "\n")
+
     logger.info("OT Cost Difference:")
     logger.info(f"  Mean:   {all_otcost_diff.mean():.6e}")
     logger.info(f"  Median: {np.median(all_otcost_diff):.6e}")
@@ -333,14 +382,14 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     for r in all_results:
         table_data.append([
             r['batch_idx'],
-            f"{r['otcost_diff']:.3e}",
-            f"{r['mse_diff_dense']:.3e}",
-            f"{r['mse_diff_sparse']:.3e}",
-            #f"{r['OT Cost GT']:.3e}",
-            #f"{r['OT Cost Pred']:.3e}"
+            f"{r['mae_sparse']:.3e}",
+            f"{r['mape_sparse']:.3e}",
+            f"{r['hellinger_sparse']:.3e}",
+            f"{r['tv_sparse']:.3e}",
+            f"{r['otcost_diff']:.3e}"
         ])
 
-    headers = ['Batch', 'OT Cost Diff', 'MSE Diff (dense)', 'MSE Diff (sparse)']
+    headers = ['Batch', 'MAE (sparse)', 'MAPE (sparse)', 'Hellinger (sparse)', 'TV (sparse)', 'OT Cost Diff']
     
     # Print summary table to terminal
     logger.info("\n" + "="*80)
@@ -359,8 +408,8 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     
     # Add title cell
     cells.append(new_markdown_cell(
-        f"# Test Set Inference Results\n\n"
-        f"**Model:** {model_name}\n\n"
+        f"# Transformers for Optimal Transport (TOT): Test Set Inference Results\n\n"
+        f"**Model:** {model_base_path}\n\n"
         f"**Total batches evaluated:** {len(all_results)}\n\n"
         f"**Dataset:** {cfg.data.hf_dataset}\n\n"
         f"**Support size (n_bins):** {n_bins}"
@@ -369,19 +418,33 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     # Add statistics summary
     stats_md = f"""## Summary Statistics
 
-### MSE Diff (dense)
-- **Mean:** {all_mse_dense.mean():.6e}
-- **Median:** {np.median(all_mse_dense):.6e}
-- **Min:** {all_mse_dense.min():.6e}
-- **Max:** {all_mse_dense.max():.6e}
-- **Std:** {all_mse_dense.std():.6e}
+### MAE (sparse)
+- **Mean:** {all_mae_sparse.mean():.6e}
+- **Median:** {np.median(all_mae_sparse):.6e}
+- **Min:** {all_mae_sparse.min():.6e}
+- **Max:** {all_mae_sparse.max():.6e}
+- **Std:** {all_mae_sparse.std():.6e}
 
-### MSE Sparse
-- **Mean:** {all_mse_sparse.mean():.6e}
-- **Median:** {np.median(all_mse_sparse):.6e}
-- **Min:** {all_mse_sparse.min():.6e}
-- **Max:** {all_mse_sparse.max():.6e}
-- **Std:** {all_mse_sparse.std():.6e}
+### MAPE (sparse)
+- **Mean:** {all_mape_sparse.mean():.6e}
+- **Median:** {np.median(all_mape_sparse):.6e}
+- **Min:** {all_mape_sparse.min():.6e}
+- **Max:** {all_mape_sparse.max():.6e}
+- **Std:** {all_mape_sparse.std():.6e}
+
+### Hellinger (sparse)
+- **Mean:** {all_hellinger_sparse.mean():.6e}
+- **Median:** {np.median(all_hellinger_sparse):.6e}
+- **Min:** {all_hellinger_sparse.min():.6e}
+- **Max:** {all_hellinger_sparse.max():.6e}
+- **Std:** {all_hellinger_sparse.std():.6e}
+
+### TV (sparse)
+- **Mean:** {all_tv_sparse.mean():.6e}
+- **Median:** {np.median(all_tv_sparse):.6e}
+- **Min:** {all_tv_sparse.min():.6e}
+- **Max:** {all_tv_sparse.max():.6e}
+- **Std:** {all_tv_sparse.std():.6e}
 
 ### OT Cost Difference
 - **Mean:** {all_otcost_diff.mean():.6e}
@@ -391,55 +454,93 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
 - **Std:** {all_otcost_diff.std():.6e}
 """
     cells.append(new_markdown_cell(stats_md))
-    
+
     # Create box plots summarizing the results
     cells.append(new_markdown_cell("## Summary Box Plots"))
-    
+
     # Create figure with two subplots for box plots
-    fig_box, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5), dpi=120)
+    fig_box, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(14, 5), dpi=120)
     
-    # Box plot for MSE Diff (sparse)
-    bp1 = ax1.boxplot(all_mse_sparse, vert=True, patch_artist=True, 
+    # Box plot for MAE (sparse)
+    bp1 = ax1.boxplot(all_mae_sparse, vert=True, patch_artist=True, 
                      boxprops=dict(facecolor='lightblue', alpha=0.7),
                      medianprops=dict(color='red', linewidth=2),
                      whiskerprops=dict(color='black', linewidth=1.5),
                      capprops=dict(color='black', linewidth=1.5))
-    ax1.set_ylabel('MSE Diff (sparse)', fontsize=12)
-    ax1.set_title('MSE Diff (sparse) Distribution', fontsize=14, fontweight='bold')
+    ax1.set_ylabel('MAE (sparse)', fontsize=12)
+    ax1.set_title('MAE (sparse) Distribution', fontsize=14, fontweight='bold')
     ax1.grid(True, alpha=0.3, axis='y')
     #ax1.set_yscale('log')  # Use log scale for better visualization
-    ax1.set_ylim(0, 0.01)
     
     # Add statistics text
-    stats_text_mse = f'Mean: {all_mse_sparse.mean():.3e}\n'
-    stats_text_mse += f'Median: {np.median(all_mse_sparse):.3e}\n'
-    stats_text_mse += f'Min: {all_mse_sparse.min():.3e}\n'
-    stats_text_mse += f'Max: {all_mse_sparse.max():.3e}'
-    ax1.text(0.98, 0.98, stats_text_mse, transform=ax1.transAxes,
+    stats_text_mae = f'Mean: {all_mae_sparse.mean():.3e}\n'
+    stats_text_mae += f'Median: {np.median(all_mae_sparse):.3e}\n'
+    stats_text_mae += f'Min: {all_mae_sparse.min():.3e}\n'
+    stats_text_mae += f'Max: {all_mae_sparse.max():.3e}'
+    ax1.text(0.98, 0.98, stats_text_mae, transform=ax1.transAxes,
              fontsize=10, verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
-    
-    # Box plot for OT Cost Diff
-    bp2 = ax2.boxplot(all_otcost_diff, vert=True, patch_artist=True,
+
+    # Box plot for MAPE (sparse)
+    bp2 = ax2.boxplot(all_mape_sparse, vert=True, patch_artist=True,
                      boxprops=dict(facecolor='lightcoral', alpha=0.7),
                      medianprops=dict(color='darkred', linewidth=2),
                      whiskerprops=dict(color='black', linewidth=1.5),
                      capprops=dict(color='black', linewidth=1.5))
-    ax2.set_ylabel('OT Cost Diff', fontsize=12)
-    ax2.set_title('OT Cost Diff Distribution', fontsize=14, fontweight='bold')
+    ax2.set_ylabel('MAPE (sparse)', fontsize=12)
+    ax2.set_title('MAPE (sparse) Distribution', fontsize=14, fontweight='bold')
     ax2.grid(True, alpha=0.3, axis='y')
     #ax2.set_yscale('log')  # Use log scale for better visualization
-    ax2.set_ylim(0, 0.01)
     
     # Add statistics text
-    stats_text_ot = f'Mean: {all_otcost_diff.mean():.3e}\n'
-    stats_text_ot += f'Median: {np.median(all_otcost_diff):.3e}\n'
-    stats_text_ot += f'Min: {all_otcost_diff.min():.3e}\n'
-    stats_text_ot += f'Max: {all_otcost_diff.max():.3e}'
-    ax2.text(0.98, 0.98, stats_text_ot, transform=ax2.transAxes,
+    stats_text_mape = f'Mean: {all_mape_sparse.mean():.3e}\n'
+    stats_text_mape += f'Median: {np.median(all_mape_sparse):.3e}\n'
+    stats_text_mape += f'Min: {all_mape_sparse.min():.3e}\n'
+    stats_text_mape += f'Max: {all_mape_sparse.max():.3e}'
+    ax2.text(0.98, 0.98, stats_text_mape, transform=ax2.transAxes,
              fontsize=10, verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+    # Box plot for Hellinger (sparse)
+    bp3 = ax3.boxplot(all_hellinger_sparse, vert=True, patch_artist=True,
+                     boxprops=dict(facecolor='lightgreen', alpha=0.7),
+                     medianprops=dict(color='darkgreen', linewidth=2),
+                     whiskerprops=dict(color='black', linewidth=1.5),
+                     capprops=dict(color='black', linewidth=1.5))
+    ax3.set_ylabel('Hellinger (sparse)', fontsize=12)
+    ax3.set_title('Hellinger (sparse) Distribution', fontsize=14, fontweight='bold')
+    ax3.grid(True, alpha=0.3, axis='y')
+    #ax3.set_yscale('log')  # Use log scale for better visualization
     
+    # Add statistics text
+    stats_text_hellinger = f'Mean: {all_hellinger_sparse.mean():.3e}\n'
+    stats_text_hellinger += f'Median: {np.median(all_hellinger_sparse):.3e}\n'
+    stats_text_hellinger += f'Min: {all_hellinger_sparse.min():.3e}\n'
+    stats_text_hellinger += f'Max: {all_hellinger_sparse.max():.3e}'
+    ax3.text(0.98, 0.98, stats_text_hellinger, transform=ax3.transAxes,
+             fontsize=10, verticalalignment='top', horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+    # Box plot for TV (sparse)
+    bp4 = ax4.boxplot(all_tv_sparse, vert=True, patch_artist=True,
+                     boxprops=dict(facecolor='lightgreen', alpha=0.7),
+                     medianprops=dict(color='darkgreen', linewidth=2),
+                     whiskerprops=dict(color='black', linewidth=1.5),
+                     capprops=dict(color='black', linewidth=1.5))
+    ax4.set_ylabel('TV (sparse)', fontsize=12)
+    ax4.set_title('TV (sparse) Distribution', fontsize=14, fontweight='bold')
+    ax4.grid(True, alpha=0.3, axis='y')
+    #ax4.set_yscale('log')  # Use log scale for better visualization
+    
+    # Add statistics text
+    stats_text_tv  = f'Mean: {all_tv_sparse.mean():.3e}\n'
+    stats_text_tv += f'Median: {np.median(all_tv_sparse):.3e}\n'
+    stats_text_tv += f'Min: {all_tv_sparse.min():.3e}\n'
+    stats_text_tv += f'Max: {all_tv_sparse.max():.3e}'
+    ax4.text(0.98, 0.98, stats_text_tv, transform=ax4.transAxes,
+             fontsize=10, verticalalignment='top', horizontalalignment='right',
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
     plt.tight_layout()
     
     # Convert box plot figure to base64 for embedding
@@ -449,7 +550,7 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     img_base64_box = base64.b64encode(buf_box.read()).decode('utf-8')
     buf_box.close()
     plt.close(fig_box)
-    
+
     # Add box plot to notebook
     cell_box = new_code_cell("")
     cell_box.outputs = [
@@ -460,15 +561,15 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
         )
     ]
     cells.append(cell_box)
-    
+
     # Add summary table
     # cells.append(new_markdown_cell("## Detailed Results Table"))
     # table_str_notebook = tabulate(table_data, headers=headers, tablefmt='pipe', floatfmt=".3e")
     # cells.append(new_markdown_cell(table_str_notebook))
-    
+
     # Add individual visualizations
-    cells.append(new_markdown_cell("## Some Individual Batch Visualizations"))
-    
+    cells.append(new_markdown_cell("## Some Individual Visualizations"))
+
     for fig_data in all_figures:
         # Add markdown header for this batch
         cells.append(new_markdown_cell(f"### Batch {fig_data['batch_idx']}"))
@@ -495,7 +596,7 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     
     # Close all remaining figures
     plt.close('all')
-    
+
     nb.cells = cells
     
     # Save notebook
@@ -681,609 +782,7 @@ def hist_from_samples(X_sampler, Y_sampler, bins=80, sample_size = 100_000, dens
     probsY = counts_Y / counts_Y.sum()     # sums to 1 exactly (ignores out-of-range)
     return probsX, probsY, bin_edges
 
-def sparse_row_string_to_dense_string(
-    s: str,
-    n_bins: int,
-    mode: str = "auto",           # 'auto' | 'index' | 'normalized'
-    precision: int = 3,
-    separator: str = ",",
-    floatmode: str = "fixed",
-    suppress_small: bool = True,
-) -> str:
-    """
-    Convert a sparse row string to a dense row string "[..., ...]".
-
-    Supported sparse formats:
-      - 'index'      : [i0,j0,v0,i1,j1,v1,...]
-      - 'normalized' : [x0,y0,v0,x1,y1,v1,...] with x=i/denom, y=j/denom,
-                       where denom is auto-chosen as n_bins or n_bins-1.
-
-    Duplicates for the same column are summed. Output has no spaces.
-    """
-    s = s.strip()
-    #print("s: ", s)
-    if s == "[]":
-        #print("String is empty, returning zeros")
-        dense = np.zeros(n_bins, dtype=float)
-        return np.array2string(
-            dense, precision=precision, separator=separator,
-            floatmode=floatmode, suppress_small=suppress_small,
-            max_line_width=1_000_000
-        )
-
-    if not s.startswith('['):
-        # String doesn't start with '[', try to recover by adding the missing bracket
-        #print(f"String doesn't start with '[', attempting recovery: {s}")
-        
-        # Try different recovery strategies
-        recovery_attempts = []
-        
-        # Strategy 1: Add missing opening bracket if string ends with ']'
-        if s.endswith(']'):
-            recovery_attempts.append('[' + s)
-        
-        # Strategy 2: If string looks like it has numbers and commas, wrap it in brackets
-        if any(c.isdigit() for c in s) and ',' in s:
-            recovery_attempts.append('[' + s + ']' if not s.endswith(']') else '[' + s)
-        
-        # Strategy 3: If string is just a closing bracket or empty, treat as empty array
-        if s.strip() in ['', ']']:
-            recovery_attempts.append('[]')
-
-        # Try each recovery attempt
-        for attempt in recovery_attempts:
-            try:
-                # Test if this recovery attempt would work by trying to parse it
-                test_inner = attempt[1:-1] if attempt.startswith('[') and attempt.endswith(']') else ""
-                if test_inner:
-                    test_vals = np.fromstring(test_inner, sep=',', dtype=float)
-                    test_vals = test_vals[np.isfinite(test_vals)]
-                    if test_vals.size > 0 and test_vals.size % 2 == 0:
-                        #print(f"Recovery successful with attempt: {attempt}")
-                        s = attempt
-                        break
-            except:
-                continue
-        else:
-            # If all recovery attempts failed, return zeros
-            #print("All recovery attempts failed, returning zeros")
-            dense = np.zeros(n_bins, dtype=float)
-            return np.array2string(
-                dense, precision=precision, separator=separator,
-                floatmode=floatmode, suppress_small=suppress_small,
-                max_line_width=1_000_000
-            )
-
-    if not s.endswith(']'):
-        # String starts with '[' but doesn't end with ']', try to recover parts
-        # Find the last ']' or use the whole string if no ']' found
-        #print("String doesn't end with ']', trying to recover parts")
-        last_bracket = s.rfind(']')
-        if last_bracket != -1:
-            s = s[:last_bracket + 1]
-        # If no ']' found, we'll try to parse what we have
-
-    inner = s[1:-1]  # comma-separated, no spaces required
-    #print("inner: ", inner)
-    # Parse with robust error handling
-    try:
-        vals = np.fromstring(inner, sep=',', dtype=float)
-        # Remove any NaN or infinite values that might have corrupted parsing
-        vals = vals[np.isfinite(vals)]
-    except:
-        # If parsing fails completely, return zeros
-        dense = np.zeros(n_bins, dtype=float)
-        return np.array2string(
-            dense, precision=precision, separator=separator,
-            floatmode=floatmode, suppress_small=suppress_small,
-            max_line_width=1_000_000
-        )
-
-    if vals.size == 0:
-        # Empty after cleaning
-        dense = np.zeros(n_bins, dtype=float)
-        return np.array2string(
-            dense, precision=precision, separator=separator,
-            floatmode=floatmode, suppress_small=suppress_small,
-            max_line_width=1_000_000
-        )
-
-    # Handle odd number of values gracefully instead of raising an error
-    if vals.size % 2 != 0:
-        # If odd, remove the last value to make it even (conservative approach)
-        if vals.size > 1:
-            vals = vals[:-1]
-        else:
-            # If only one value and odd, must be incomplete, so return zeros
-            dense = np.zeros(n_bins, dtype=float)
-            return np.array2string(
-                dense, precision=precision, separator=separator,
-                floatmode=floatmode, suppress_small=suppress_small,
-                max_line_width=1_000_000
-            )
-
-    triples = vals.reshape(-1, 2)
-    col_index = triples[:, 0]
-    value = triples[:, 1]
-
-    # Filter out invalid entries
-    # Condition 1: Discard indices > n_bins
-    valid_mask = col_index <= n_bins
-    # Condition 2: Discard values > 1
-    valid_mask = valid_mask & (value <= 1.0)
-
-    # Apply the mask to filter valid entries
-    col_index = col_index[valid_mask]
-    value = value[valid_mask]
-
-    #print(f"Filtered entries: {valid_mask.sum()} valid out of {len(valid_mask)} total")
-
-    # Build dense row
-    dense = np.zeros(n_bins, dtype=float)
-
-    if mode == "index":
-        # i,j as integer-like indices
-        j_idx = np.rint(col_index).astype(int)
-        cols = np.clip(j_idx, 0, n_bins - 1)
-        np.add.at(dense, cols, value)
-
-    # Format dense row as a compact string (no spaces)
-    return np.array2string(
-        dense, precision=precision, separator=separator,
-        floatmode=floatmode, suppress_small=suppress_small,
-        max_line_width=1_000_000
-    )
-
-def test_1d_distribution_examples(cfg: DictConfig, pytorch_model=None, tokenizer=None, model_name=None):
-
-    """
-    Test 1D distribution examples across multiple distribution pairs.
-
-    Args:
-        cfg: Hydra configuration
-        pytorch_model: Pre-loaded model (optional). If None, will load from config.
-        tokenizer: Pre-loaded tokenizer (optional). If None, will load from config.
-    """
-    import matplotlib.pyplot as plt
-    import ot
-    # --- tiny adapter to match hist_from_samplers API ---
-    class NumpySampler:
-        def __init__(self, fn, name=None):
-            self.fn = fn  # fn(n) -> np.ndarray of shape (n,)
-            self.name = name or "NumpySampler"
-        def sample(self, n):
-            x = self.fn(n).astype(np.float32)
-            return torch.from_numpy(x).view(-1, 1)  # (n, 1)
-
-    def zscore(x, eps=1e-8):
-        x = (x - x.mean()) / (x.std() + eps)
-        return x
-
-    # --- distribution factories (all return NumpySampler with a .name) ---
-    def BetaLeft(a=2.0, b=5.0):
-        return NumpySampler(lambda n: zscore(np.random.beta(a, b, size=n)),
-                            name=f"BetaLeft")
-
-    def BetaRight(a=5.0, b=2.0):
-        return NumpySampler(lambda n: zscore(np.random.beta(a, b, size=n)),
-                            name=f"BetaRight")
-
-    def LogNormal(mu=0.0, sigma=0.5):
-        return NumpySampler(lambda n: zscore(np.random.lognormal(mean=mu, sigma=sigma, size=n)),
-                            name=f"LogNormal")
-
-    def Laplace(loc=0.0, scale=1.0):
-        return NumpySampler(lambda n: zscore(np.random.laplace(loc, scale, size=n)),
-                            name=f"Laplace")
-
-    def StudentT(df=3):
-        return NumpySampler(lambda n: zscore(np.random.standard_t(df, size=n)),
-                            name=f"StudentT")
-
-    def CauchyTrunc(x0=0.0, gamma=1.0, clip=6.0):
-        def _f(n):
-            x = np.random.standard_cauchy(size=n) * gamma + x0
-            x = np.clip(x, -clip, clip)
-            return zscore(x)
-        return NumpySampler(_f, name=f"CauchyTrunc")
-
-    def Triangular(left=-2.0, mode=0.0, right=2.0):
-        return NumpySampler(lambda n: zscore(np.random.triangular(left, mode, right, size=n)),
-                            name=f"Triangular")
-
-    def UniformLowHigh(low=-2.0, high=2.0):
-        return NumpySampler(lambda n: zscore(np.random.uniform(low, high, size=n)),
-                            name=f"Uniform")
-
-    def GaussianShifted(mu=1.5, sigma=1.0):
-        return NumpySampler(lambda n: zscore(np.random.normal(mu, sigma, size=n)),
-                            name=f"GaussianShifted")
-
-    def GaussianMixture(means=(-2.0, 2.0), sigmas=(0.7, 0.7), weights=(0.5, 0.5)):
-        means, sigmas, weights = np.array(means), np.array(sigmas), np.array(weights)
-        weights = weights / weights.sum()
-        def _f(n):
-            comps = np.random.choice(len(weights), size=n, p=weights)
-            x = np.random.normal(loc=means[comps], scale=sigmas[comps])
-            return zscore(x)
-        return NumpySampler(_f, name=f"GaussianMixture")
-
-    def Exponential(scale=1.0):
-        return NumpySampler(lambda n: zscore(np.random.exponential(scale, size=n)),
-                            name=f"Exponential")
-
-    def Weibull(a=1.5, scale=1.0):
-        return NumpySampler(lambda n: zscore(scale * np.random.weibull(a, size=n)),
-                            name=f"Weibull")
-
-    def Gamma(shape=2.0, scale=1.0):
-        return NumpySampler(lambda n: zscore(np.random.gamma(shape, scale, size=n)),
-                            name=f"Gamma")
-
-    def Pareto(a=2.5, clip=10.0):
-        def _f(n):
-            x = np.random.pareto(a, size=n)
-            x = np.clip(x, 0, clip)
-            return zscore(x)
-        return NumpySampler(_f, name=f"Pareto")
-
-    def Cosine():
-        return NumpySampler(lambda n: np.cos(zscore(np.random.rand(n) * np.pi - np.pi/2)),
-                            name="Cosine")
-
-    def BimodalUniform(low1=-3, high1=-1, low2=1, high2=3, p=0.5):
-        def _f(n):
-            mask = np.random.rand(n) < p
-            x = np.empty(n)
-            x[mask] = np.random.uniform(low1, high1, size=mask.sum())
-            x[~mask] = np.random.uniform(low2, high2, size=(~mask).sum())
-            return zscore(x)
-        return NumpySampler(_f, name=f"BimodalUniform")
-
-    def GaussianMixtureWideNarrow():
-        return GaussianMixture(means=(0, 0), sigmas=(0.3, 2.0), weights=(0.5, 0.5))
-
-    # New sampler pairs to rotate through (source, target)
-    sampler_pairs = [
-        (BetaLeft(), BetaRight()),                     # skewed vs opposite skew
-        (Laplace(), UniformLowHigh()),                 # heavy-tail vs uniform
-        (StudentT(df=5), GaussianShifted(mu=1.0)),     # t vs shifted normal
-        (LogNormal(sigma=0.6), Laplace(scale=1.5)),    # skewed heavy-tail vs laplace
-        (CauchyTrunc(clip=5.0), StudentT(df=3)),       # very heavy-tail (trunc) vs heavy-tail
-        (Triangular(-3, 0, 3), UniformLowHigh(-3, 3)), # triangular vs uniform
-        (GaussianMixture(means=(-2, 2), sigmas=(0.7, 0.7), weights=(0.4, 0.6)),
-        GaussianMixture(means=(-3, 0, 3), sigmas=(0.6, 0.5, 0.6), weights=(0.2, 0.6, 0.2))),
-        # --- extra pairs ---
-        (Exponential(scale=1.0), Weibull(a=2.0)),        # skew vs flexible skew
-        (Gamma(2.0), LogNormal(mu=0.0, sigma=0.8)),      # gamma vs lognormal
-        (Pareto(a=2.5), Laplace(scale=1.0)),             # fat tail vs double exponential
-        (BimodalUniform(), GaussianMixture()),           # bimodal uniform vs Gaussian mixture
-        (Cosine(), Triangular(-2, 0, 2)),                # bounded oscillatory vs triangular
-        (GaussianMixtureWideNarrow(), StudentT(df=2)),   # wide/narrow mixture vs heavy tail
-        (UniformLowHigh(-5, 5), Pareto(a=3.0)),          # flat vs power-law
-    ]
-
-    # Add reciprocal pairs immediately after each original pair
-    sampler_pairs_with_reciprocals = []
-    for a, b in sampler_pairs:
-        sampler_pairs_with_reciprocals.append((a, b))
-        sampler_pairs_with_reciprocals.append((b, a))
-
-    # Load the pre-trained model if not provided
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Collect results across trials
-    all_results = []
-    all_figures = []  # Store figures for notebook
-    n_samples   = 1_000_000
-    n_bins      = cfg.data.dataset.support_size
-    # check encoder C in config
-    cost_type   = cfg.data.dataset.input_cost_type
-    row_wise    = cfg.data.dataset.row_wise
-
-    # Evaluate distribution pairs
-    for idx, (X_sampler, Y_sampler) in enumerate(sampler_pairs_with_reciprocals):
-
-        logger.info(f"Evaluating pair {idx+1}/{len(sampler_pairs_with_reciprocals)}: {X_sampler.name} -> {Y_sampler.name}")
-
-        source, target, _ = hist_from_samples(
-            X_sampler, Y_sampler, bins=n_bins, sample_size=n_samples, density=False
-        )
-
-        # Define support points
-        if cost_type == 'fixed':
-            # fixed C case
-            metric = 'sqeuclidean'
-            xs = np.zeros((n_bins, 2))
-            xt = np.zeros((n_bins, 2))
-            xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
-            xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
-        elif cost_type == 'semivariable':
-            xs = np.zeros((n_bins, 2))
-            xt = np.zeros((n_bins, 2))
-            xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
-            xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
-            possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
-            # pick a random metric
-            metric = np.random.choice(possible_metrics)
-            # one-hot encode the chosen metric
-            metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
-        elif cost_type == 'variable':
-            metric = 'sqeuclidean'
-            # n_bins defined elsewhere
-            x_low = 0; x_high = n_bins
-            # integers from [x_low, x_high) -> 0 to 9
-            xs = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
-            xt = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
-
-        # Define cost matrix
-        C = ot.dist(xs, xt, metric=metric)
-        C /= C.max()
-
-        # Compute ground truth OT plan using POT
-        otplan_solve = ot.solve(
-            C, a=source, b=target
-        )
-
-        otplan_solve_sparse = otplan_solve.sparse_plan
-        otplan_solve_dense  = otplan_solve.plan
-        # Convert source/target distributions to tensors
-        source_tensor = torch.tensor(source, dtype=my_dtype_torch)
-        target_tensor = torch.tensor(target, dtype=my_dtype_torch)
-
-        # Yield individual bin samples
-        if row_wise:
-            encoder_input_ab = []
-            encoder_input_c  = []
-            for j in range(n_bins):
-                input_idx = [j / n_bins]
-                input_total = torch.hstack((
-                    source_tensor,
-                    target_tensor,
-                    torch.tensor(input_idx, dtype=my_dtype_torch)
-                )).to(my_dtype_torch)
-                encoder_input_ab.append(input_total)
-
-                if cost_type == 'variable':
-                    encoder_input_c.append(torch.tensor(C, dtype=my_dtype_torch).flatten(start_dim=0))
-                elif cost_type == 'semivariable':
-                    encoder_input_c.append(torch.tensor(metric_one_hot))
-
-        # else:
-        #     encoder_input_ab = torch.hstack((
-        #         source_tensor,
-        #         target_tensor
-        #     )).to(my_dtype_torch)
-
-        #     if cost_fixed:
-        #         encoder_input_C = None
-        #     else:
-        #         encoder_input_C  = torch.tensor(C, dtype=my_dtype_torch)
-        #         encoder_input_C  = encoder_input_C.flatten(start_dim=0).to(device)
-
-        encoder_input_ab = torch.stack(encoder_input_ab).to(device)
-        if cost_type == 'fixed':
-            encoder_input_c = None
-        elif cost_type == 'semivariable':
-            encoder_input_c = torch.stack(encoder_input_c).to(device)
-        elif cost_type == 'variable':
-            encoder_input_c = torch.stack(encoder_input_c).to(device)
-
-        # Run model INFERENCE
-        text_ids_pred = pytorch_model.generate(
-            encoder_input_ab = encoder_input_ab,
-            encoder_input_c  = encoder_input_c,
-            temperature=0.1
-        )
-        text_pred = tokenizer.from_tokens(text_ids_pred)
-        print( "idx: ", idx, "text_pred: ", text_pred)
-        text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
-
-        text_pred_dense = [sparse_row_string_to_dense_string(t, n_bins, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
-        ot_pred_dense = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
-        # build sparse matrix directly
-        ot_pred_sparse = sparse.coo_matrix(
-            ot_pred_dense, shape=otplan_solve_sparse.shape
-        )
-
-        # Calculate MSE diff
-        mse_diff_dense  = mean_squared_error(otplan_solve_dense.flatten(), ot_pred_dense.flatten())
-        mse_diff_sparse = utils.sparse_mse(otplan_solve_sparse, ot_pred_sparse)
-        # Calculate OT cost diff
-        otcost_gt     = otplan_solve.value
-        otcost_pred   = (ot_pred_dense * C).sum()
-        otcost_diff   = abs(otcost_pred - otcost_gt)
-
-        # Compute metrics
-        ot_plan_pred = ot_pred_dense
-        ot_plan_gt   = otplan_solve_dense
-
-        all_results.append({
-            'source': X_sampler.name,
-            'target': Y_sampler.name,
-            'OT Cost diff': otcost_diff,
-            'MSE diff dense': mse_diff_dense,
-            'MSE diff sparse': mse_diff_sparse
-        })
-
-        # Create visualization
-        fig, axarr = plt.subplots(1, 6, figsize=(20, 3.5), dpi=120)
-        fig.suptitle(f"{X_sampler.name} → {Y_sampler.name}", fontsize=16, y=1.02)
-
-        # Titles
-        axarr[0].set_title(f"Source $\\mu$ (1D)", fontsize=12)
-        axarr[1].set_title(f"Target $\\nu$ (1D)", fontsize=12)
-        if cost_type == 'semivariable':
-            axarr[2].set_title(f"Cost Matrix: {metric}", fontsize=12)
-        else:
-            axarr[2].set_title("Cost Matrix: ", fontsize=12)
-        axarr[3].set_title(r"$\pi$ Ground Truth (POT)", fontsize=12)
-        axarr[4].set_title(r"$\hat{\pi}$ Ours (TOT)", fontsize=12)
-
-        # Common vmin/vmax for OT plans
-        vmin = 0
-        vmax = max(np.max(ot_plan_pred), np.max(ot_plan_gt))
-
-        # --- Source (bar) ---
-        bin_edges = np.arange(len(source) + 1)
-        axarr[0].bar(
-            bin_edges[:-1], source,
-            width=1.0, color="tab:blue", alpha=0.7, edgecolor="black"
-        )
-        axarr[0].set_xlim(0, len(source))
-        axarr[0].set_ylim(0, max(source.max(), target.max()) * 1.1)
-        axarr[0].set_xlabel("Bin index")
-        axarr[0].set_ylabel("Probability")
-
-        # --- Target (bar) ---
-        bin_edges = np.arange(len(target) + 1)
-        axarr[1].bar(
-            bin_edges[:-1], target,
-            width=1.0, color="tab:blue", alpha=0.7, edgecolor="black"
-        )
-        axarr[1].set_xlim(0, len(target))
-        axarr[1].set_ylim(0, max(source.max(), target.max()) * 1.1)
-        axarr[1].set_xlabel("Bin index")
-        axarr[1].set_ylabel("Probability")
-        
-        # --- Cost matrix ---
-        im2 = axarr[2].imshow(C, cmap='Blues', origin='lower', aspect="auto")
-        axarr[2].set_xlabel("Target bins")
-        axarr[2].set_ylabel("Source bins")
-        plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
-
-        # --- Ground truth ---
-        im3 = axarr[3].imshow(ot_plan_gt, cmap='Blues', vmin=vmin, vmax=vmax, 
-                             origin='lower', aspect="auto")
-        axarr[3].set_xlabel("Target bins")
-        axarr[3].set_ylabel("Source bins")
-        axarr[3].text(0.02, 0.98, rf'$\sum \pi = {otplan_solve_sparse.sum():.5f}$', 
-                     transform=axarr[3].transAxes, fontsize=10,
-                     verticalalignment='top', bbox=dict(boxstyle='round', 
-                     facecolor='white', alpha=0.8))
-        plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
-
-        # --- Model Prediction ---
-        im4 = axarr[4].imshow(ot_plan_pred, cmap='Reds', vmin=vmin, vmax=vmax, 
-                             origin='lower', aspect="auto")
-        axarr[4].set_xlabel("Target bins")
-        axarr[4].set_ylabel("Source bins")
-        axarr[4].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_pred_sparse.sum():.5f}$',
-                     transform=axarr[4].transAxes, fontsize=10,
-                     verticalalignment='top', bbox=dict(boxstyle='round',
-                     facecolor='white', alpha=0.8))
-        plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
-
-        # --- Model Prediction on Dataset (samples + plan on axarr[5]) ---
-        # Make axarr[5] the current axis so plot2D_samples_mat draws there
-        plt.sca(axarr[5])
-        # set title
-        pl.title("Support points (1D)")
-        ot.plot.plot2D_samples_mat(xs, xt, ot_plan_pred, c=[0.5, 0.5, 1])
-        pl.plot(xs[:, 0], xs[:, 1], "+b", label="Source")
-        pl.plot(xt[:, 0], xt[:, 1], "xr", label="Target")
-        pl.legend(loc="best")
-        pl.axis("equal")
-
-        # Add error metrics text
-        fig.text(0.5, -0.02, f'MSE Diff (sparse): {mse_diff_sparse:.3e}  |  ' + 
-                f'OT Cost Diff: {otcost_diff:.3e}',
-                ha='center', fontsize=11, bbox=dict(boxstyle='round', 
-                facecolor='lightyellow', alpha=0.8))
-
-        plt.tight_layout()
-        
-        # Store figure for notebook
-        all_figures.append({
-            'fig': fig,
-            'source': X_sampler.name,
-            'target': Y_sampler.name,
-            'idx': idx
-        })
-
-    # Prepare summary table data
-    table_data = []
-    for r in all_results:
-        table_data.append([
-            r['source'],
-            r['target'],
-            f"{r['OT Cost diff']:.3e}",
-            f"{r['MSE diff sparse']:.3e}"
-        ])
-
-    headers = ['Source', 'Target', 'OT Cost Diff', 'MSE Diff (dense)', 'MSE Diff (sparse)']
-
-    # Print summary table to terminal
-    logger.info("\n" + "="*80)
-    logger.info("SUMMARY OF RESULTS")
-    logger.info("="*80)
-    table_str_terminal = tabulate(table_data, headers=headers, tablefmt='grid', floatfmt=".3e")
-    logger.info("\n" + table_str_terminal)
-
-    # Create Jupyter notebook with results
-    logger.info("\n" + "="*80)
-    logger.info("Creating Jupyter notebook with results")
-    logger.info("="*80)
-    
-    nb = new_notebook()
-    cells = []
-    
-    # Add title cell
-    cells.append(new_markdown_cell("# Optimal Transport Inference Results\n\n"
-                                   f"Total pairs evaluated: {len(all_results)}"))
-    
-    # Add summary table
-    cells.append(new_markdown_cell("## Summary Table"))
-    table_str_notebook = tabulate(table_data, headers=headers, tablefmt='pipe', floatfmt=".3e")
-    cells.append(new_markdown_cell(table_str_notebook))
-    
-    # Add each figure as embedded image
-    cells.append(new_markdown_cell("## Individual Results"))
-    
-    for fig_data in all_figures:
-        # Add markdown header for this pair
-        cells.append(new_markdown_cell(f"### {fig_data['idx']}: {fig_data['source']} → {fig_data['target']}"))
-        
-        # Convert figure to base64 for embedding
-        buf = BytesIO()
-        fig_data['fig'].savefig(buf, format='png', bbox_inches='tight', dpi=120)
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        buf.close()
-
-        plt.close(fig_data['fig'])
-        
-        # Create an empty code cell with the figure as output (no code visible)
-        cell = new_code_cell("")
-        cell.outputs = [
-            nbformat.v4.new_output(
-                output_type='display_data',
-                data={'image/png': img_base64},
-                metadata={}
-            )
-        ]
-        cells.append(cell)
-    
-    # Now close all figures
-    import matplotlib.pyplot as plt
-    plt.close('all')
-
-    nb.cells = cells
-
-    # Save notebook
-    os.makedirs(cfg.inference.out_dir, exist_ok=True)
-    save_dir = os.path.join(cfg.inference.out_dir, model_name)
-    notebook_path = os.path.join(save_dir, f'{model_name}_inference_customset.ipynb')
-
-    with open(notebook_path, 'w') as f:
-        nbformat.write(nb, f)
-
-    logger.info(f"Saved notebook to: {notebook_path}")
-    logger.info(f"Open with: jupyter notebook {notebook_path}")
-
-    return all_results
-
-def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None, tokenizer=None, model_base_path=None):
+def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenizer=None, model_base_path=None):
 
     """
     Test 1D distribution examples across all distribution pairs.
@@ -1411,9 +910,6 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
     ]
 
     # define all cross pairs
-    #sampler_pairs = [(a, b) for a in list_distributions for b in list_distributions]
-
-    # instead of a list use a matrix
     sampler_pairs_matrix = np.empty((len(list_distributions), len(list_distributions)), dtype=object)
     for i, a in enumerate(list_distributions):
         for j, b in enumerate(list_distributions):
@@ -1437,7 +933,6 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
         metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
     elif cost_type == 'variable':
         metrics = ['sqeuclidean']
-
 
     # Evaluate distribution pairs in the matrix
     for metric in metrics:
@@ -1542,20 +1037,26 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
                 print( "idx: ", idx, "text_pred: ", text_pred)
                 text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
 
-                text_pred_dense = [sparse_row_string_to_dense_string(t, n_bins, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
+                text_pred_dense = [utils.parse_predicted_sparse_row_string(t, n_bins, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
                 ot_pred_dense = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
                 # build sparse matrix directly
                 ot_pred_sparse = sparse.coo_matrix(
                     ot_pred_dense, shape=otplan_solve_sparse.shape
                 )
 
-                # Calculate MSE diff
-                mse_diff_dense  = mean_squared_error(otplan_solve_dense.flatten(), ot_pred_dense.flatten())
-                mse_diff_sparse = utils.sparse_mse(otplan_solve_sparse, ot_pred_sparse)
+                # Calculate MAE diff
+                #abs_diff_dense  = sklearn.metrics.mean_absolute_error(otplan_solve_dense.flatten(), ot_pred_dense.flatten())
+                mae_diff_sparse  = utils.sparse_mean_abs_error(otplan_solve_sparse, ot_pred_sparse)
+                # Calculate MAPE diff
+                mape_diff_sparse = utils.sparse_mean_abs_percentage_error(otplan_solve_sparse, ot_pred_sparse)
+                # Calculate Hellinger diff
+                hellinger_diff_sparse = utils.sparse_hellinger_distance(otplan_solve_sparse, ot_pred_sparse)
                 # Calculate OT cost diff
                 otcost_gt     = otplan_solve.value
                 otcost_pred   = (ot_pred_dense * C).sum()
                 otcost_diff   = abs(otcost_pred - otcost_gt)
+                # Calculate Total Variation diff
+                tv_diff_sparse = utils.sparse_total_variation(otplan_solve_sparse, ot_pred_sparse)
 
                 # Compute metrics
                 ot_plan_pred = ot_pred_dense
@@ -1564,9 +1065,11 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
                 all_results.append({
                     'source': X_sampler.name,
                     'target': Y_sampler.name,
-                    'OT Cost diff': otcost_diff,
-                    'MSE diff dense': mse_diff_dense,
-                    'MSE diff sparse': mse_diff_sparse
+                    'otcost_diff': otcost_diff,
+                    'mae_diff_sparse': mae_diff_sparse,
+                    'mape_diff_sparse': mape_diff_sparse,
+                    'hellinger_diff_sparse': hellinger_diff_sparse,
+                    'tv_diff_sparse': tv_diff_sparse
                 })
 
                 # Create visualization
@@ -1585,28 +1088,27 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
                 vmax = max(np.max(ot_plan_pred), np.max(ot_plan_gt))
 
                 # --- Source (bar) ---
-                bin_edges = np.arange(len(source) + 1)
+                bin_edges = np.arange(len(source))
                 axarr[0].bar(
-                    bin_edges[:-1], 
-                    source,
-                    width=1.0, color="tab:blue", alpha=0.7, edgecolor="black", linewidth=1
+                    bin_edges, source,
+                    width=1.0, color="tab:blue", alpha=0.7, edgecolor="black", align='center', linewidth=0.5
                 )
-                axarr[0].set_xlim(-0.5, len(source))
-                axarr[0].set_ylim(0, max(source.max(), target.max()) * 1.1)
+                #axarr[0].set_xlim(-0.5, len(source))
+                #axarr[0].set_ylim(0, max(source.max(), target.max()) * 1.1)
                 axarr[0].set_xlabel("Bin index")
                 axarr[0].set_ylabel("Probability")
 
                 # --- Target (bar) ---
-                bin_edges = np.arange(len(target) + 1)
+                bin_edges = np.arange(len(target))
                 axarr[1].bar(
-                    bin_edges[:-1], target,
-                    width=1.0, color="tab:blue", alpha=0.7, edgecolor="black", linewidth=1
+                    bin_edges, target,
+                    width=1.0, color="tab:blue", alpha=0.7, edgecolor="black", align='center', linewidth=0.5
                 )
-                axarr[1].set_xlim(-0.5, len(target))
-                axarr[1].set_ylim(0, max(source.max(), target.max()) * 1.1)
+                #axarr[1].set_xlim(-0.5, len(target))
+                #axarr[1].set_ylim(0, max(source.max(), target.max()) * 1.1)
                 axarr[1].set_xlabel("Bin index")
                 axarr[1].set_ylabel("Probability")
-                
+
                 # --- Cost matrix ---
                 im2 = axarr[2].imshow(C, cmap='Blues', origin='lower', aspect="auto")
                 axarr[2].set_xlabel("Target bins")
@@ -1620,12 +1122,12 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
                 axarr[3].set_ylabel("Source bins")
                 axarr[3].text(0.02, 0.98, rf'$\sum \pi = {otplan_solve_sparse.sum():.5f}$', 
                             transform=axarr[3].transAxes, fontsize=10,
-                            verticalalignment='top', bbox=dict(boxstyle='round', 
+                            verticalalignment='top', bbox=dict(boxstyle='round',
                             facecolor='white', alpha=0.8))
                 plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
 
                 # --- Model Prediction ---
-                im4 = axarr[4].imshow(ot_plan_pred, cmap='Reds', vmin=vmin, vmax=vmax, 
+                im4 = axarr[4].imshow(ot_plan_pred, cmap='Reds', vmin=vmin, vmax=vmax,
                                     origin='lower', aspect="auto")
                 axarr[4].set_xlabel("Target bins")
                 axarr[4].set_ylabel("Source bins")
@@ -1647,9 +1149,12 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
                 pl.axis("equal")
 
                 # Add error metrics text
-                fig.text(0.5, -0.02, f'MSE Diff (sparse): {mse_diff_sparse:.3e}  |  ' + 
+                fig.text(0.5, -0.02, f'MAE (sparse): {mae_diff_sparse:.3e}  |  ' +
+                        f'MAPE (sparse): {mape_diff_sparse:.3e}  |  ' +
+                        f'Hellinger (sparse): {hellinger_diff_sparse:.3e}  |  ' +
+                        f'TV (sparse): {tv_diff_sparse:.3e}  |  ' +
                         f'OT Cost Diff: {otcost_diff:.3e}',
-                        ha='center', fontsize=11, bbox=dict(boxstyle='round', 
+                        ha='center', fontsize=11, bbox=dict(boxstyle='round',
                         facecolor='lightyellow', alpha=0.8))
 
                 plt.tight_layout()
@@ -1671,17 +1176,21 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
         col_names = [sampler_pairs_matrix[0, j][1].name for j in range(n_cols)]
 
         # Create result matrices
-        otcost_diff_matrix = np.zeros((n_rows, n_cols))
-        mse_diff_sparse_matrix = np.zeros((n_rows, n_cols))
-        mse_diff_dense_matrix = np.zeros((n_rows, n_cols))
+        otcost_diff_matrix     = np.zeros((n_rows, n_cols))
+        mae_diff_sparse_matrix = np.zeros((n_rows, n_cols))
+        mape_diff_sparse_matrix = np.zeros((n_rows, n_cols))
+        hellinger_diff_sparse_matrix = np.zeros((n_rows, n_cols))
+        tv_diff_sparse_matrix = np.zeros((n_rows, n_cols))
 
         # Fill matrices from all_results (results are stored in row-major order)
         for idx, r in enumerate(all_results):
             i = idx // n_cols
             j = idx % n_cols
-            otcost_diff_matrix[i, j] = r['OT Cost diff']
-            mse_diff_sparse_matrix[i, j] = r['MSE diff sparse']
-            mse_diff_dense_matrix[i, j] = r['MSE diff dense']
+            otcost_diff_matrix[i, j]            = r['otcost_diff']
+            mae_diff_sparse_matrix[i, j]        = r['mae_diff_sparse']
+            mape_diff_sparse_matrix[i, j]       = r['mape_diff_sparse']
+            hellinger_diff_sparse_matrix[i, j]  = r['hellinger_diff_sparse']
+            tv_diff_sparse_matrix[i, j]         = r['tv_diff_sparse']
 
         # Create OT Cost Diff squared table
         logger.info("\n" + "="*80)
@@ -1698,35 +1207,65 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
         otcost_table_str = tabulate(otcost_table_data, headers=otcost_headers, tablefmt='grid', floatfmt=".3e")
         logger.info("\n" + otcost_table_str)
         
-        # Create MSE Diff squared table
+        # Create MAE Diff (sparse) squared table
         logger.info("\n" + "="*80)
-        logger.info("SQUARED TABLE: MSE DIFF (SPARSE)")
+        logger.info("SQUARED TABLE: MAE DIFF (SPARSE)")
         logger.info("="*80)
         
         # Prepare table data with row names
-        mse_sparse_table_data = []
+        mae_diff_sparse_table_data = [] 
         for i, row_name in enumerate(row_names):
-            row = [row_name] + [f"{mse_diff_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
-            mse_sparse_table_data.append(row)
+            row = [row_name] + [f"{mae_diff_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
+            mae_diff_sparse_table_data.append(row)
         
-        mse_sparse_headers = ['Source \\ Target'] + col_names
-        mse_sparse_table_str = tabulate(mse_sparse_table_data, headers=mse_sparse_headers, tablefmt='grid', floatfmt=".3e")
-        logger.info("\n" + mse_sparse_table_str)
+        mae_diff_sparse_headers = ['Source \\ Target'] + col_names
+        mae_diff_sparse_table_str = tabulate(mae_diff_sparse_table_data, headers=mae_diff_sparse_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + mae_diff_sparse_table_str)
         
-        # Create MSE Diff (Dense) squared table
+        # Create MAPE Diff (Sparse) squared table
         logger.info("\n" + "="*80)
-        logger.info("SQUARED TABLE: MSE DIFF (DENSE)")
+        logger.info("SQUARED TABLE: MAPE DIFF (SPARSE)")
         logger.info("="*80)
         
         # Prepare table data with row names
-        mse_dense_table_data = []
+        mape_diff_sparse_table_data = []    
         for i, row_name in enumerate(row_names):
-            row = [row_name] + [f"{mse_diff_dense_matrix[i, j]:.3e}" for j in range(n_cols)]
-            mse_dense_table_data.append(row)
+            row = [row_name] + [f"{mape_diff_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
+            mape_diff_sparse_table_data.append(row)
         
-        mse_dense_headers = ['Source \\ Target'] + col_names
-        mse_dense_table_str = tabulate(mse_dense_table_data, headers=mse_dense_headers, tablefmt='grid', floatfmt=".3e")
-        logger.info("\n" + mse_dense_table_str)
+        mape_diff_sparse_headers = ['Source \\ Target'] + col_names
+        mape_diff_sparse_table_str = tabulate(mape_diff_sparse_table_data, headers=mape_diff_sparse_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + mape_diff_sparse_table_str)
+
+        # Create Hellinger Diff (Sparse) squared table
+        logger.info("\n" + "="*80)
+        logger.info("SQUARED TABLE: HELLINGER DIFF (SPARSE)")
+        logger.info("="*80)
+        
+        # Prepare table data with row names
+        hellinger_diff_sparse_table_data = []
+        for i, row_name in enumerate(row_names):
+            row = [row_name] + [f"{hellinger_diff_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
+            hellinger_diff_sparse_table_data.append(row)
+        
+        hellinger_diff_sparse_headers = ['Source \\ Target'] + col_names
+        hellinger_diff_sparse_table_str = tabulate(hellinger_diff_sparse_table_data, headers=hellinger_diff_sparse_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + hellinger_diff_sparse_table_str)
+
+        # Create TV Diff (Sparse) squared table
+        logger.info("\n" + "="*80)
+        logger.info("SQUARED TABLE: TV DIFF (SPARSE)")
+        logger.info("="*80)
+        
+        # Prepare table data with row names
+        tv_diff_sparse_table_data = []
+        for i, row_name in enumerate(row_names):
+            row = [row_name] + [f"{tv_diff_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
+            tv_diff_sparse_table_data.append(row)
+        
+        tv_diff_sparse_headers = ['Source \\ Target'] + col_names
+        tv_diff_sparse_table_str = tabulate(tv_diff_sparse_table_data, headers=tv_diff_sparse_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + tv_diff_sparse_table_str)
 
         # Prepare summary table data
         table_data = []
@@ -1734,11 +1273,14 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
             table_data.append([
                 r['source'],
                 r['target'],
-                f"{r['OT Cost diff']:.3e}",
-                f"{r['MSE diff sparse']:.3e}"
+                f"{r['otcost_diff']:.3e}",
+                f"{r['mae_diff_sparse']:.3e}",
+                f"{r['mape_diff_sparse']:.3e}",
+                f"{r['hellinger_diff_sparse']:.3e}",
+                f"{r['tv_diff_sparse']:.3e}"
             ])
 
-        headers = ['Source', 'Target', 'OT Cost Diff', 'MSE Diff (dense)', 'MSE Diff (sparse)']
+        headers = ['Source', 'Target', 'OT Cost Diff', 'MAE (sparse)', 'MAPE (sparse)', 'Hellinger (sparse)', 'TV (sparse)']
 
         # Print summary table to terminal
         logger.info("\n" + "="*80)
@@ -1754,10 +1296,14 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
         
         nb = new_notebook()
         cells = []
-        
+
         # Add title cell
         # add total distributions evaluated
-        cells.append(new_markdown_cell("# Transformers for Optimal Transport (TOT): Evaluation Results\n\n"
+        cells.append(new_markdown_cell("# Transformers for Optimal Transport (TOT): Evaluation Results - Metric: {metric}\n\n"
+                                    f"Model: {model_base_path}\n\n"
+                                    f"Dataset: {cfg.data.hf_dataset}\n\n"
+                                    f"Dataset size: {cfg.data.dataset.size_n}\n\n"
+                                    f"Support size (n_bins): {n_bins}\n\n"
                                     f"Total distributions evaluated: {len(list_distributions)}\n\n"
                                     f"Total pairs evaluated: {len(all_results)}"))
 
@@ -1766,12 +1312,18 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
         cells.append(new_markdown_cell("### OT Cost Diff"))
         otcost_table_str_notebook = tabulate(otcost_table_data, headers=otcost_headers, tablefmt='pipe', floatfmt=".3e")
         cells.append(new_markdown_cell(otcost_table_str_notebook))
-        cells.append(new_markdown_cell("### MSE Diff (Sparse)"))
-        mse_sparse_table_str_notebook = tabulate(mse_sparse_table_data, headers=mse_sparse_headers, tablefmt='pipe', floatfmt=".3e")
-        cells.append(new_markdown_cell(mse_sparse_table_str_notebook))
-        cells.append(new_markdown_cell("### MSE Diff (Dense)"))
-        mse_dense_table_str_notebook = tabulate(mse_dense_table_data, headers=mse_dense_headers, tablefmt='pipe', floatfmt=".3e")
-        cells.append(new_markdown_cell(mse_dense_table_str_notebook))
+        cells.append(new_markdown_cell("### MAE (Sparse)"))
+        mae_diff_sparse_table_str_notebook = tabulate(mae_diff_sparse_table_data, headers=mae_diff_sparse_headers, tablefmt='pipe', floatfmt=".3e")
+        cells.append(new_markdown_cell(mae_diff_sparse_table_str_notebook))
+        cells.append(new_markdown_cell("### MAPE (Sparse)"))
+        mape_diff_sparse_table_str_notebook = tabulate(mape_diff_sparse_table_data, headers=mape_diff_sparse_headers, tablefmt='pipe', floatfmt=".3e")
+        cells.append(new_markdown_cell(mape_diff_sparse_table_str_notebook))
+        cells.append(new_markdown_cell("### Hellinger (Sparse)"))
+        hellinger_diff_sparse_table_str_notebook = tabulate(hellinger_diff_sparse_table_data, headers=hellinger_diff_sparse_headers, tablefmt='pipe', floatfmt=".3e")
+        cells.append(new_markdown_cell(hellinger_diff_sparse_table_str_notebook))
+        cells.append(new_markdown_cell("### TV (Sparse)"))
+        tv_diff_sparse_table_str_notebook = tabulate(tv_diff_sparse_table_data, headers=tv_diff_sparse_headers, tablefmt='pipe', floatfmt=".3e")
+        cells.append(new_markdown_cell(tv_diff_sparse_table_str_notebook))
 
         # Add each figure as embedded image
         cells.append(new_markdown_cell("## Individual Results"))
@@ -1779,7 +1331,7 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
         for fig_data in all_figures:
             # Add markdown header for this pair
             cells.append(new_markdown_cell(f"### {fig_data['idx']}: {fig_data['source']} → {fig_data['target']}"))
-            
+
             # Convert figure to base64 for embedding
             buf = BytesIO()
             fig_data['fig'].savefig(buf, format='png', bbox_inches='tight', dpi=120)
@@ -1788,7 +1340,7 @@ def test_1d_distribution_examples_all_pairs(cfg: DictConfig, pytorch_model=None,
             buf.close()
 
             plt.close(fig_data['fig'])
-            
+
             # Create an empty code cell with the figure as output (no code visible)
             cell = new_code_cell("")
             cell.outputs = [

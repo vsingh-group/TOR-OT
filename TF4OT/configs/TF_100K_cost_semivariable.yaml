@@ -55,6 +55,7 @@ inference:
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}
-  batch_size:   ${data.dataset.support_size}
+  #batch_size:   ${data.dataset.support_size}
+  batch_size:   3500
   test_all_testset: true             # Set to true to test all testset examples
-  test_custom_distributions: false   # Set to true to run distribution pair tests
+  test_custom_distributions: true   # Set to true to run distribution pair tests
