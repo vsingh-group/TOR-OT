@@ -13,6 +13,7 @@ import random
 import argparse
 import numpy as np
 import scipy.sparse as sp
+from TF4OT import utils
 from pathlib import Path
 from typing import Dict
 from tqdm.auto import tqdm
