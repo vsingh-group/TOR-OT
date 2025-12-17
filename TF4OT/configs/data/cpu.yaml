@@ -4,11 +4,7 @@ data_dir: "./decoder4ot/experiments/singletarget/ot_sample_data/n_5k/support_10"
 # Dataset parameters
 dataset:
   size: 5000  # Medium dataset for CPU training
-  support_size: 10  # Standard support size
-  feature_dim: 21  # Dimension of input features
-  target_dim: 1  # Dimension of target values
-  num_targets: 1  # Number of target distributions per sample
-
+\
 # Data splitting parameters
 splitting:
   test_size: 0.2  # Fraction of data to use for testing

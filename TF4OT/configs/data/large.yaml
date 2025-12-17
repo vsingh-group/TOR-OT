@@ -5,9 +5,6 @@ data_dir: "./decoder4ot/experiments/singletarget/ot_sample_data/n_50k/support_20
 dataset:
   size: 50000  # Large dataset for production training
   support_size: 20  # Larger support size for more complex distributions
-  feature_dim: 21  # Dimension of input features
-  target_dim: 1  # Dimension of target values
-  num_targets: 1  # Number of target distributions per sample
 
 # Data splitting parameters
 splitting:

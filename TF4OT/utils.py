@@ -10,6 +10,8 @@ import io
 #mydtype = torch.float32
 my_dtype_np    = np.float32
 my_dtype_torch = torch.float32
+metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'canberra']
+
 
 class RankFilter(logging.Filter):
     def __init__(self, rank:int): self.rank = rank

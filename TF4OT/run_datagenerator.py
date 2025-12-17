@@ -81,7 +81,7 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
     target_dist /= target_dist.sum(axis=1, keepdims=True)
 
     # Define support points
-    possible_metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
+    possible_metrics = utils.metrics
     metric_one_hot = None
 
     # Fixed cost matrix case - same C for all samples

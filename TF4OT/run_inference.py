@@ -1,3 +1,4 @@
+from typing import NoReturn
 from TF4OT import tokenizers
 from TF4OT import model
 from TF4OT import utils
@@ -11,6 +12,7 @@ import functools
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+torch.set_printoptions(linewidth=1_000)
 import sklearn.metrics
 from scipy import sparse
 from tqdm import tqdm
@@ -84,43 +86,39 @@ def inference_routine(cfg):
 
     # Loading TEST dataset
     logger.info("Loading dataset: " + cfg.data.hf_dataset)
-    dataset     = load_dataset(cfg.data.hf_dataset, cache_dir=cfg.data.hf_cache_dir)
-    test_data   = dataset["test"]
-    test_loader = DataLoader(test_data,
-                            batch_size=cfg.inference.batch_size,
+    dataset         = load_dataset(cfg.data.hf_dataset, cache_dir=cfg.data.hf_cache_dir)
+    test_data       = dataset["test"]
+    testset_size    = cfg.inference.testset_size * cfg.data.dataset.support_size
+    test_data_adjusted  = test_data.select(range(testset_size))
+    batch_size_adjusted = cfg.inference.batch_size * cfg.data.dataset.support_size
+    test_loader = DataLoader(test_data_adjusted,
+                            batch_size=batch_size_adjusted,
                             shuffle=False,
                             num_workers=cfg.data.loading.num_workers,
                             pin_memory=(device.type == "cuda"),
                             collate_fn=utils.collate_from_string
     )
-    logger.info(f"test_size={len(test_data)}, test.batch_size={cfg.inference.batch_size}, "
+    logger.info(f"test_size={len(test_data_adjusted)}, batch_size={batch_size_adjusted}, "
                 f"batches_per_epoch={len(test_loader)}")
 
     # Create Tokenizer
     # TODO: add support for more tokenizers
 
     # Run distribution pair tests if enabled
-    if hasattr(cfg.inference, 'test_custom_distributions') and cfg.inference.test_custom_distributions:
+    if hasattr(cfg.inference, 'test_over_custom_pairs') and cfg.inference.test_over_custom_pairs:
         logger.info(f"{'='*80}")
         logger.info("Starting distribution pairs evaluation...")
         logger.info(f"{'='*80}\n")
         eval_all_1d_distribution_pairs(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path)
-        # test_1d_distribution_examples(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_name=model_name)
 
     # Limit test batches if not testing full dataset
-    if hasattr(cfg.inference, 'test_all_testset') and cfg.inference.test_all_testset:
-        # all testset
-        #test_batches  = test_loader
-        #total_batches = len(test_loader)
-        # only a small number of batches
-        test_batches  = itertools.islice(test_loader, 1)
-        total_batches = min(1, len(test_loader))
+    if hasattr(cfg.inference, 'test_over_testset') and cfg.inference.test_over_testset:
 
         eval_all_testset(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path,
-                        test_batches=test_batches, total_batches=total_batches, device=device, model_name=model_name)
+                        test_batches=test_loader, device=device, model_name=model_name)
 
 def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=None,
-                     test_batches=None, total_batches=None, device=None, model_name=None):
+                     test_batches=None, device=None, model_name=None):
     """
     Evaluate all testset examples.
     """
@@ -141,13 +139,14 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     all_figures          = []
     all_results          = []
 
-    n_bins     = cfg.data.dataset.support_size
-    cost_type  = cfg.data.dataset.input_cost_type
-    batch_size = cfg.inference.batch_size
-    fig_counter= 0
+    n_bins      = cfg.data.dataset.support_size
+    cost_type   = cfg.data.dataset.input_cost_type
+    batch_size  = cfg.inference.batch_size
+    fig_counter = 0
+    fig_counter_max = 20
 
     with torch.no_grad():
-        pbar = tqdm(test_batches, total=total_batches)
+        pbar = tqdm(test_batches, total=cfg.inference.testset_size, leave=False)
         for batch_idx, batch in enumerate(pbar):
 
             # Run model INFERENCE
@@ -160,7 +159,9 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                 encoder_input_c = batch[OT_INPUT_COST_ONEHOT].flatten(start_dim=1).to(device)
             text_ids_pred = pytorch_model.generate(encoder_input_ab=encoder_input_ab,
                                                    encoder_input_c=encoder_input_c,
-                                                   temperature=0.1)
+                                                   temperature=0.1,
+                                                   max_seq_len=cfg.inference.max_seq_len
+                                                   )
             # text_ids_pred.shape: (batch_size, max_seq_len)
             text_pred_list = tokenizer.from_tokens(text_ids_pred)
             # len(text_pred_list): batch_size
@@ -172,10 +173,10 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
             ot_pred_dense_batch   = torch.from_numpy(ot_pred_dense_batch).to(dtype=my_dtype_torch)
 
             # loop over batch (rows)
-            for k in range(0, batch_size, n_bins):
-                print("processing item", k)
+            for k in range(0, test_batches.batch_size, n_bins):
+                #print("processing item", k)
                 start = k
-                end   = min(k + n_bins, batch_size)
+                end   = min(k + n_bins, test_batches.batch_size)
 
                 ot_pred_dense   = ot_pred_dense_batch[start:end].detach()
                 ot_pred_sparse  = sparse.coo_matrix(ot_pred_dense.cpu().numpy())
@@ -215,7 +216,7 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                 })
 
                 # Only create figures for first few batches to avoid memory issues
-                if fig_counter < min(20, batch_size):
+                if fig_counter < fig_counter_max:
                     fig_counter += 1
                     # Create visualization for first sample in batch
                     source = batch[OT_SOURCE_DIST][k].cpu().numpy()
@@ -226,8 +227,7 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                     fig.suptitle(f"Batch {k}", fontsize=16, y=1.02)
 
                     # Titles
-                    metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
-                    metric = metrics[input_cost_onehot.argmax()]
+                    metric = utils.metrics[input_cost_onehot.argmax()]
                     axarr[0].set_title(f"Source $\\mu$ (1D)", fontsize=12)
                     axarr[1].set_title(f"Target $\\nu$ (1D)", fontsize=12)
                     axarr[2].set_title(f"Cost Matrix: {metric}", fontsize=12)
@@ -304,14 +304,19 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                         'batch_idx': k
                     })
 
-                # Update progress bar with current metrics
-                pbar.set_postfix({
-                    'mae_sparse': f'{mae_sparse:.6e}',
-                    'mape_sparse': f'{mape_sparse:.6e}',
-                    'hellinger_sparse': f'{hellinger_sparse:.6e}',
-                    'otcost_diff': f'{otcost_diff:.6e}',
-                    'tv_sparse': f'{tv_sparse:.6e}'
-                })
+            # Update progress bar with current metrics
+            pbar.set_postfix(
+                {
+                    'batch_idx': batch_idx,
+                    'mae_sparse': f'{np.mean(all_mae_sparse):.6e}',
+                    'mape_sparse': f'{np.mean(all_mape_sparse):.6e}',
+                    'hellinger_sparse': f'{np.mean(all_hellinger_sparse):.6e}',
+                    'otcost_diff': f'{np.mean(all_otcost_diff):.6e}',
+                    'tv_sparse': f'{np.mean(all_tv_sparse):.6e}',
+                },
+                refresh=False
+            )
+
 
     # Convert to numpy arrays for statistics
     all_mae_sparse       = np.array(all_mae_sparse)
@@ -408,7 +413,7 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     
     # Add title cell
     cells.append(new_markdown_cell(
-        f"# Transformers for Optimal Transport (TOT): Test Set Inference Results\n\n"
+        f"# Transformers for Optimal Transport (TOT): Test Set Results\n\n"
         f"**Model:** {model_base_path}\n\n"
         f"**Total batches evaluated:** {len(all_results)}\n\n"
         f"**Dataset:** {cfg.data.hf_dataset}\n\n"
@@ -568,7 +573,7 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     # cells.append(new_markdown_cell(table_str_notebook))
 
     # Add individual visualizations
-    cells.append(new_markdown_cell("## Some Individual Visualizations"))
+    cells.append(new_markdown_cell(f"## First {fig_counter_max} Individual Visualizations"))
 
     for fig_data in all_figures:
         # Add markdown header for this batch
@@ -1031,14 +1036,19 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 text_ids_pred = pytorch_model.generate(
                     encoder_input_ab = encoder_input_ab,
                     encoder_input_c  = encoder_input_c,
-                    temperature=0.1
+                    temperature=0.1,
+                    max_seq_len=cfg.inference.max_seq_len
                 )
                 text_pred = tokenizer.from_tokens(text_ids_pred)
-                print( "idx: ", idx, "text_pred: ", text_pred)
+                print( "pair idx: ", idx)
+                print( "text_pred: ", text_pred)
                 text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
-
+                print( "text_pred_truncated: ", text_pred)
                 text_pred_dense = [utils.parse_predicted_sparse_row_string(t, n_bins, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
+                #print( "text_pred_dense: ", text_pred_dense)
                 ot_pred_dense = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
+                ot_pred_dense_torch = torch.from_numpy(ot_pred_dense)
+                print( "ot_pred_dense: \n", ot_pred_dense_torch)
                 # build sparse matrix directly
                 ot_pred_sparse = sparse.coo_matrix(
                     ot_pred_dense, shape=otplan_solve_sparse.shape
@@ -1299,10 +1309,10 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
 
         # Add title cell
         # add total distributions evaluated
-        cells.append(new_markdown_cell("# Transformers for Optimal Transport (TOT): Evaluation Results - Metric: {metric}\n\n"
+        cells.append(new_markdown_cell(f"# Transformers for Optimal Transport (TOT): Evaluation Results - Metric: {metric}\n\n"
                                     f"Model: {model_base_path}\n\n"
                                     f"Dataset: {cfg.data.hf_dataset}\n\n"
-                                    f"Dataset size: {cfg.data.dataset.size_n}\n\n"
+                                    f"Dataset size: {cfg.data.dataset.size_s}\n\n"
                                     f"Support size (n_bins): {n_bins}\n\n"
                                     f"Total distributions evaluated: {len(list_distributions)}\n\n"
                                     f"Total pairs evaluated: {len(all_results)}"))

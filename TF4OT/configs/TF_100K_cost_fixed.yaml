@@ -12,7 +12,9 @@ defaults:
 
 # Override specific parameters
 data:
-  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
+  #sqeuclidean
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
+  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_canberra_bins30"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
@@ -55,10 +57,12 @@ tokenizer:
   #   num_mantissa_digits: 10
 
 inference:
+  max_seq_len:  64
   out_dir:      "./experiments/cost_fixed"
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}
-  batch_size:   ${data.dataset.support_size}
-  test_all_testset: true            # Set to true to test all testset examples
-  test_custom_distributions: false   # Set to true to run distribution pair tests
+  batch_size:   1
+  testset_size: 1_000
+  test_over_testset:      true       # Set to true to test all testset examples
+  test_over_custom_pairs: true       # Set to true to run distribution pair tests

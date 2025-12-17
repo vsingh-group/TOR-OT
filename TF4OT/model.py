@@ -240,20 +240,21 @@ class TokenRegressor_flash(nn.Module):
             encoder_input_c=None,
             temperature: float = 1.0,
             top_k: int | None = None,
-            top_p: float | None = None
+            top_p: float | None = None,
+            max_seq_len: int = 512
         ):
 
         batch_size = encoder_input_ab.shape[0]
         # pre-allocate output token ids
         #token_ids = -1 * np.ones((batch_size, self.max_seq_len), dtype=int)
         token_ids = torch.full(
-            size=(batch_size, self.max_seq_len),
+            size=(batch_size, max_seq_len),
             fill_value=-1,
             dtype=torch.long,
             device=encoder_input_ab.device
         )
         print("Starting generation...")
-        for i in range(self.max_seq_len):
+        for i in range(max_seq_len):
             #print (f"Generating token {i+1}/{self.max_seq_len}", end='\r')
             # tokens generated so far
             tensor_slice = token_ids[:, :i]
