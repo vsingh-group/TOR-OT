@@ -187,7 +187,8 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                 # Calculate MAE
                 mae_sparse  = utils.sparse_mean_abs_error(ot_target_sparse, ot_pred_sparse)
                 # Calculate MAPE
-                mape_sparse = utils.sparse_mean_abs_percentage_error(ot_target_sparse, ot_pred_sparse)
+                #mape_sparse = utils.sparse_mean_abs_percentage_error(ot_target_sparse, ot_pred_sparse)
+                mape_sparse = utils.sparse_weighted_mean_abs_percentage_error(ot_target_sparse, ot_pred_sparse)
                 # Calculate Hellinger
                 hellinger_sparse = utils.sparse_hellinger_distance(ot_target_sparse, ot_pred_sparse)
                 # Calculate Total Variation
@@ -933,7 +934,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
     row_wise    = cfg.data.dataset.row_wise
 
     if cost_type == 'fixed':
-        metrics = ['sqeuclidean']
+        metrics = ['canberra']
     elif cost_type == 'semivariable':
         metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
     elif cost_type == 'variable':
@@ -959,7 +960,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 # Define support points
                 if cost_type == 'fixed':
                     # fixed C case
-                    metric = 'sqeuclidean'
+                    metric = 'canberra'
                     xs = np.zeros((n_bins, 2))
                     xt = np.zeros((n_bins, 2))
                     xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)

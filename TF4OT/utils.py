@@ -290,8 +290,8 @@ def sparse_mean_abs_error(A: sparse.coo_matrix, B: sparse.coo_matrix) -> float:
     return mae
 # MAPE
 def sparse_mean_abs_percentage_error(
-    A: sparse.coo_matrix,
-    B: sparse.coo_matrix,
+    A: sparse.coo_matrix, #target
+    B: sparse.coo_matrix, #prediction
     eps: float = 1e-12,
 ) -> float:
     """
@@ -306,8 +306,6 @@ def sparse_mean_abs_percentage_error(
     # Canonicalize COO (merge duplicates)
     A = A.tocoo().copy()
     B = B.tocoo().copy()
-    A.sum_duplicates()
-    B.sum_duplicates()
 
     # Union support via sparse difference (keeps only places where they differ),
     # plus we still need places where A==B!=0. So we explicitly union indices.
@@ -338,7 +336,73 @@ def sparse_mean_abs_percentage_error(
     y_true_safe = np.where(np.abs(y_true) < eps, np.sign(y_true) * eps, y_true)
     y_true_safe = np.where(y_true_safe == 0.0, eps, y_true_safe)
 
-    return float(sklearn.metrics.mean_absolute_percentage_error(y_true_safe, y_pred))
+    mape_score = sklearn.metrics.mean_absolute_percentage_error(y_true_safe, y_pred)
+    mape_score = float(mape_score)
+
+    return mape_score
+
+# wMAPE
+def sparse_weighted_mean_abs_percentage_error(
+    A: sparse.coo_matrix, #target
+    B: sparse.coo_matrix, #prediction
+    eps: float = 1e-12,
+) -> float:
+    """
+    MAPE over the union of nonzero locations in A and B.
+    Missing entries are treated as 0.
+
+    Computes mean(|A - B| / max(|A|, eps)) over (i,j) where A_ij != 0 or B_ij != 0.
+    """
+    if A.shape != B.shape:
+        raise ValueError(f"Shape mismatch: {A.shape} vs {B.shape}")
+
+    # Canonicalize COO (merge duplicates)
+    A = A.tocoo().copy()
+    B = B.tocoo().copy()
+
+    # Union support via sparse difference (keeps only places where they differ),
+    # plus we still need places where A==B!=0. So we explicitly union indices.
+    # Build union index set in a vectorized way.
+    idxA = A.row.astype(np.int64) * A.shape[1] + A.col.astype(np.int64)
+    idxB = B.row.astype(np.int64) * B.shape[1] + B.col.astype(np.int64)
+    idxU = np.union1d(idxA, idxB)
+
+    if idxU.size == 0:
+        return 0.0
+
+    # Convert both to CSR for fast indexed lookup
+    A_csr = A.tocsr()
+    B_csr = B.tocsr()
+
+    rows = (idxU // A.shape[1]).astype(np.int32)
+    cols = (idxU %  A.shape[1]).astype(np.int32)
+
+    # Gather values at union locations (sparse indexing returns a matrix)
+    y_true = np.asarray(A_csr[rows, cols]).ravel().astype(np.float64)
+    y_pred = np.asarray(B_csr[rows, cols]).ravel().astype(np.float64)
+
+    # Make MAPE well-defined when y_true == 0:
+    # sklearn already uses an internal epsilon, but we can be explicit and stable.
+    # This implements |y_true - y_pred| / max(|y_true|, eps) through sklearn by
+    # scaling y_true away from exact zeros.
+    # (Equivalent to clipping denominator)
+    y_true_safe = np.where(np.abs(y_true) < eps, np.sign(y_true) * eps, y_true)
+    y_true_safe = np.where(y_true_safe == 0.0, eps, y_true_safe)
+
+
+    # Calculate the sum of absolute errors
+    absolute_errors_sum = np.sum(np.abs(y_true_safe - y_pred))
+    
+    # Calculate the sum of actual values
+    actual_values_sum = np.sum(np.abs(y_true_safe))
+    
+    # Avoid division by zero
+    if actual_values_sum == 0:
+        return 0.0  # Or handle as appropriate for your use case
+        
+    wmape = absolute_errors_sum / actual_values_sum
+
+    return float(wmape)
 
 # Hellinger
 def sparse_hellinger_distance(P: sparse.coo_matrix, Q: sparse.coo_matrix) -> float:
