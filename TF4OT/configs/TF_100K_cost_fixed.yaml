@@ -13,8 +13,8 @@ defaults:
 # Override specific parameters
 data:
   #sqeuclidean
-  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
-  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_canberra_bins30"
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
+  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_canberra_bins30"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
@@ -34,7 +34,7 @@ model:
   use_flash_attention: true
 
 training:
-  num_epochs:            50
+  num_epochs:            25
   #batch_size_per_device: 3712   # tiny model
   #batch_size_per_device: 3712   # small model
   batch_size_per_device: 192     # medium model
@@ -65,4 +65,4 @@ inference:
   batch_size:   1
   testset_size: 1_000
   test_over_testset:      true       # Set to true to test all testset examples
-  test_over_custom_pairs: false       # Set to true to run distribution pair tests
+  test_over_custom_pairs: true       # Set to true to run distribution pair tests
