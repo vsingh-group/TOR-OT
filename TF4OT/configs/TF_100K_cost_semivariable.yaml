@@ -12,7 +12,9 @@ defaults:
 
 # Override specific parameters
 data:
-  hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_all8_bin30"
+  #hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_all8_bin30"
+  #metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'canberra']
+  hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_all5_bin30"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
@@ -21,7 +23,7 @@ data:
     support_size:          30
     input_total_dim:       61             # row-wise -> 2*support_size+1 
     input_cost_type:       "semivariable" # fixed, variable, semivariable
-    input_cost_matrix_dim: 8              # variable: support_size*support_size or semivariable: number of metrics used
+    input_cost_matrix_dim: 5              # variable: support_size*support_size or semivariable: number of metrics used
     row_wise:              true
   loading:
     num_workers:           20
@@ -53,7 +55,7 @@ tokenizer:
 
 inference:
   max_seq_len:  64
-  out_dir:      "./experiments/cost_semivariable"
+  out_dir:      "./experiments/cost_fixed"
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}
@@ -61,3 +63,4 @@ inference:
   testset_size: 1_000
   test_over_testset:      true       # Set to true to test all testset examples
   test_over_custom_pairs: true       # Set to true to run distribution pair tests
+  test_neural_ot:         true       # Set to true to run neural OT tests

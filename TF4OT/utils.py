@@ -281,6 +281,45 @@ def parse_predicted_sparse_row_string(
         max_line_width=1_000_000
     )
 
+
+def hist_from_samples(X_sample, Y_sample, bins=80, density=False, trim_percentiles=(0.5, 99.5)):
+    """
+    Returns:
+        counts_X: (bins,) histogram for X
+        counts_Y: (bins,) histogram for Y
+        bin_edges: (bins+1,) shared edges
+    """
+
+
+    # To flat numpy
+    def to_1d_np(t):
+        if isinstance(t, torch.Tensor):
+            t = t.detach().cpu().numpy()
+        return np.asarray(t).reshape(-1)
+
+    X_np = to_1d_np(X_sample)
+    Y_np = to_1d_np(Y_sample)
+
+    # Shared bin edges (optionally trimmed for stability)
+    if trim_percentiles is not None:
+        p_lo, p_hi = trim_percentiles
+        lo = np.percentile(np.concatenate([X_np, Y_np]), p_lo)
+        hi = np.percentile(np.concatenate([X_np, Y_np]), p_hi)
+        rng = (lo, hi)
+    else:
+        lo = np.min([X_np.min(), Y_np.min()])
+        hi = np.max([X_np.max(), Y_np.max()])
+        rng = (lo, hi)
+
+    bin_edges = np.linspace(rng[0], rng[1], bins + 1)
+
+    # Histograms with shared edges
+    counts_X, _ = np.histogram(X_np, bins=bin_edges, density=density)
+    probsX = counts_X / counts_X.sum()     # sums to 1 exactly (ignores out-of-range)
+    counts_Y, _ = np.histogram(Y_np, bins=bin_edges, density=density)
+    probsY = counts_Y / counts_Y.sum()     # sums to 1 exactly (ignores out-of-range)
+    return probsX, probsY, rng
+
 # MAE
 def sparse_mean_abs_error(A: sparse.coo_matrix, B: sparse.coo_matrix) -> float:
     if A.shape != B.shape:
@@ -462,4 +501,5 @@ def get_subfolder_name_from_cfg(cfg):
             f"_{'DigitTokenizer' if hasattr(cfg.tokenizer, 'DigitTokenizer') else 'IEEEFloatTokenizer'}"
             f"_epochs{cfg.training.num_epochs}"
             f"_batch{cfg.training.batch_size_per_device}"
+            f"{'_' + cfg.data.dataset.input_cost_metric if cfg.data.dataset.input_cost_type in ['fixed', 'variable'] else ''}"
     )

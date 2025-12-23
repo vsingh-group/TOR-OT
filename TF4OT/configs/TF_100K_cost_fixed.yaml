@@ -13,8 +13,9 @@ defaults:
 # Override specific parameters
 data:
   #sqeuclidean
-  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
-  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_canberra_bins30"
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_cityblock_bins30"
+  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_canberra_bins30"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
@@ -23,6 +24,7 @@ data:
     support_size:          30
     input_total_dim:       61      # row-wise -> 2*support_size+1
     input_cost_type:       "fixed" # fixed, variable, semivariable
+    input_cost_metric:     "sqeuclidean" # only for "fixed" and "variable" costs
     input_cost_matrix_dim: 0       # support_size*support_size
     row_wise:              true
   loading:
@@ -34,7 +36,7 @@ model:
   use_flash_attention: true
 
 training:
-  num_epochs:            25
+  num_epochs:            50
   #batch_size_per_device: 3712   # tiny model
   #batch_size_per_device: 3712   # small model
   batch_size_per_device: 192     # medium model
@@ -64,5 +66,6 @@ inference:
   use_amp:      ${training.use_amp}
   batch_size:   1
   testset_size: 1_000
-  test_over_testset:      true       # Set to true to test all testset examples
+  test_over_testset:      false       # Set to true to test all testset examples
   test_over_custom_pairs: true       # Set to true to run distribution pair tests
+  test_neural_ot:         true       # Set to true to run neural OT tests

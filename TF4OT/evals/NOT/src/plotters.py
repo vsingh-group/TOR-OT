@@ -196,75 +196,75 @@ def plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD):
     fig.tight_layout()
     return fig, axes
 
-def plot_1D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1024):
+def plot_1D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1024, num_bins=30, rng=None):
     DIM = 1; freeze(T)
     
     X, Y = X_sampler.sample(num_samples), Y_sampler.sample(num_samples)
     X_np, Y_np = X.cpu().numpy(), Y.cpu().numpy()
     
-    fig, axes = plt.subplots(1, 4, figsize=(12, 3), dpi=150)
+    # fig, axes = plt.subplots(1, 4, figsize=(12, 3), dpi=150)
     
-    axes[2].set_xlim(-2.5, 2.5); axes[2].set_ylim(-2.5, 2.5)
+    # axes[2].set_xlim(-2.5, 2.5); axes[2].set_ylim(-2.5, 2.5)
     
-    axes[0].set_axisbelow(True); axes[0].grid(axis='x')
-    axes[1].set_axisbelow(True); axes[1].grid(axis='y')
-    axes[3].set_axisbelow(True); axes[3].grid(axis='y')
-    axes[0].set_xlim(-2.5, 2.5); axes[0].set_ylim(0, 0.7)
-    axes[1].set_ylim(-2.5, 2.5); axes[1].set_xlim(0, 0.7)
-    axes[3].set_ylim(-2.5, 2.5); axes[3].set_xlim(0, 0.7)
+    # axes[0].set_axisbelow(True); axes[0].grid(axis='x')
+    # axes[1].set_axisbelow(True); axes[1].grid(axis='y')
+    # axes[3].set_axisbelow(True); axes[3].grid(axis='y')
+    # axes[0].set_xlim(-2.5, 2.5); axes[0].set_ylim(0, 0.7)
+    # axes[1].set_ylim(-2.5, 2.5); axes[1].set_xlim(0, 0.7)
+    # axes[3].set_ylim(-2.5, 2.5); axes[3].set_xlim(0, 0.7)
     
-    # Plotting X
-    sns.kdeplot(
-        X_np[:, 0], color='darkseagreen', shade=True,
-        edgecolor='black', alpha=0.95,
-        ax=axes[0], label=r'$x\sim\mathbb{P}$'
-    )  
-    axes[0].legend(fontsize=12, loc='upper left', framealpha=1)
-#     axes[0].set_xlabel(r"$x$", fontsize=12)
-    axes[0].set_title(r"Input $\mathbb{P}$ (1D)", fontsize=14)
+    # # Plotting X
+    # sns.kdeplot(
+    #     X_np[:, 0], color='darkseagreen', shade=True,
+    #     edgecolor='black', alpha=0.95,
+    #     ax=axes[0], label=r'$x\sim\mathbb{P}$'
+    # )  
+    # axes[0].legend(fontsize=12, loc='upper left', framealpha=1)
+    # axes[0].set_xlabel(r"$x$", fontsize=12)
+    # axes[0].set_title(r"Input $\mathbb{P}$ (1D)", fontsize=14)
     
-    # Plotting Y
-    sns.kdeplot(
-        y=Y_np[:, 0], color='wheat', shade=True,
-        edgecolor='black', alpha=0.95,
-        ax=axes[1], label=r'$y\sim\mathbb{Q}$'
-    )
-    axes[1].legend(fontsize=12, loc='upper left', framealpha=1)   
-#     axes[1].set_ylabel(r"$y$", fontsize=12)
-    axes[1].set_title(r"Target $\mathbb{Q}$ (1D)", fontsize=14)
+    # # Plotting Y
+    # sns.kdeplot(
+    #     y=Y_np[:, 0], color='wheat', shade=True,
+    #     edgecolor='black', alpha=0.95,
+    #     ax=axes[1], label=r'$y\sim\mathbb{Q}$'
+    # )
+    # axes[1].legend(fontsize=12, loc='upper left', framealpha=1)   
+    # axes[1].set_ylabel(r"$y$", fontsize=12)
+    # axes[1].set_title(r"Target $\mathbb{Q}$ (1D)", fontsize=14)
         
-    # Computing and plotting our OT map
-    with torch.no_grad():
-        X = X.reshape(-1, 1, DIM).repeat(1, 1, 1)
-        Z = torch.randn(X.size(0), 1, ZD, device='cuda') * Z_STD
-        XZ = torch.cat([X, Z], dim=2)
-        T_XZ = T(
-            XZ.flatten(start_dim=0, end_dim=1)
-        )
+    # # Computing and plotting our OT map
+    # with torch.no_grad():
+    #     X = X.reshape(-1, 1, DIM).repeat(1, 1, 1)
+    #     Z = torch.randn(X.size(0), 1, ZD, device='cuda') * Z_STD
+    #     XZ = torch.cat([X, Z], dim=2)
+    #     T_XZ = T(
+    #         XZ.flatten(start_dim=0, end_dim=1)
+    #     )
     
-    X_np = X[:, 0].cpu().numpy()
-    T_XZ_np = T_XZ.cpu().numpy()
+    # X_np = X[:, 0].cpu().numpy()
+    # T_XZ_np = T_XZ.cpu().numpy()
     
-    sns.kdeplot(
-        x=X_np[:, 0], y=T_XZ_np[:, 0], xlim=(-2.5, 2.5), ylim=(-2.5, 2.5),
-        color='black', alpha=1., ax=axes[2],
-        label=r'$(x,\hat{T}(x,z))\sim \hat{\pi}$'
-    )
-    sns.kdeplot(
-        x=X_np[:, 0], y=T_XZ_np[:, 0], xlim=(-2.5, 2.5), ylim=(-2.5, 2.5),
-        color='white', alpha=.3, ax=axes[2], shade=True
-    )
-    axes[2].set_title(r"Learned $\hat{\pi}$ (2D), ours", fontsize=14)
+    # sns.kdeplot(
+    #     x=X_np[:, 0], y=T_XZ_np[:, 0], xlim=(-2.5, 2.5), ylim=(-2.5, 2.5),
+    #     color='black', alpha=1., ax=axes[2],
+    #     label=r'$(x,\hat{T}(x,z))\sim \hat{\pi}$'
+    # )
+    # sns.kdeplot(
+    #     x=X_np[:, 0], y=T_XZ_np[:, 0], xlim=(-2.5, 2.5), ylim=(-2.5, 2.5),
+    #     color='white', alpha=.3, ax=axes[2], shade=True
+    # )
+    # axes[2].set_title(r"Learned $\hat{\pi}$ (2D), ours", fontsize=14)
     
-    # Plotting T(X,Z)
-    sns.kdeplot(
-        x=T_XZ_np[:, 0], color='sandybrown', shade=True,
-        edgecolor='black', alpha=0.95,
-        ax=axes[3], label=r'$T(x,z)\sim T_{\sharp}(\mathbb{P}\times\mathbb{S})$'
-    )
-    axes[3].legend(fontsize=12, loc='upper left', framealpha=1)   
-#     axes[1].set_ylabel(r"$y$", fontsize=12)
-    axes[3].set_title(r"Mapped $T_{\sharp}(\mathbb{P}\times\mathbb{S})$ (1D)", fontsize=14)
+    # # Plotting T(X,Z)
+    # sns.kdeplot(
+    #     y=T_XZ_np[:, 0], color='sandybrown', shade=True,
+    #     edgecolor='black', alpha=0.95,
+    #     ax=axes[3], label=r'$T(x,z)\sim T_{\sharp}(\mathbb{P}\times\mathbb{S})$'
+    # )
+    # axes[3].legend(fontsize=12, loc='upper left', framealpha=1)   
+    # axes[1].set_ylabel(r"$y$", fontsize=12)
+    # axes[3].set_title(r"Mapped $T_{\sharp}(\mathbb{P}\times\mathbb{S})$ (1D)", fontsize=14)
     
     # Computing and plotting our bar. proj
     X = X_sampler.sample(num_samples)
@@ -276,20 +276,29 @@ def plot_1D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1024):
         T_XZ = T(
             XZ.flatten(start_dim=0, end_dim=1)
         ).reshape(-1, Z_SIZE, 1)
-    
+
     X_np = X[:, 0].cpu().numpy()
     T_bar_np = T_XZ.mean(dim=1).cpu().numpy()
     X_T_bar = np.concatenate([X_np, T_bar_np], axis=1)
     X_T_bar.sort(axis=0)
-    axes[2].plot(
-        X_T_bar[:,0], X_T_bar[:,1], color='sandybrown', 
-        linewidth=3, label=r'$x\mapsto \overline{T}(x)$'
-    )
-    axes[2].legend(fontsize=12, loc='upper left', framealpha=1)
+    #axes[2].plot(
+    #    X_T_bar[:,0], X_T_bar[:,1], color='sandybrown', 
+    #    linewidth=3, label=r'$x\mapsto \overline{T}(x)$'
+    #)
+    #axes[2].legend(fontsize=12, loc='upper left', framealpha=1)
 
-    fig.tight_layout(pad=0.01)
+    #fig.tight_layout(pad=0.01)
     
-    return fig, axes
+    # original return
+    #return fig, axes
+
+    # modified return to be able to compare NOT with ours (TOT)
+    X_np = X[:, 0].detach().cpu().numpy().reshape(-1)
+    Y_np = T_XZ.detach().cpu().numpy()[:, 0].reshape(-1)
+    bin_edges = np.linspace(rng[0], rng[1], num_bins + 1)
+    hist, _, _ = np.histogram2d(X_np, Y_np, bins=bin_edges, density=False)
+    hist = hist / hist.sum()  # normalize to sum=1
+    return X_T_bar, hist
 
 
 def plot_1D_discrete(X_sampler, Y_sampler, num_samples=1024):
@@ -318,11 +327,11 @@ def plot_1D_discrete(X_sampler, Y_sampler, num_samples=1024):
             XY.append((X_np[i][0], Y_np[idx[-1]][0]))
         XY = np.array(XY)
         sns.kdeplot(
-            XY[:, 0], XY[:, 1], xlim=(-2.5, 2.5), ylim=(-2.5, 2.5),
+            x=XY[:, 0], y=XY[:, 1], xlim=(-2.5, 2.5), ylim=(-2.5, 2.5),
             color='black', alpha=1., ax=axes[j], label=r'$(x,y)\sim\pi^{*}$'
         ) 
         sns.kdeplot(
-            XY[:, 0], XY[:, 1], xlim=(-2.5, 2.5), ylim=(-2.5, 2.5),
+            x=XY[:, 0], y=XY[:, 1], xlim=(-2.5, 2.5), ylim=(-2.5, 2.5),
             color='lemonchiffon', alpha=0.5, ax=axes[j], shade=True
         )
         

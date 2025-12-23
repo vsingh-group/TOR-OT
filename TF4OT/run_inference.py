@@ -3,6 +3,7 @@ from TF4OT import tokenizers
 from TF4OT import model
 from TF4OT import utils
 from TF4OT.utils import my_dtype_np, my_dtype_torch
+from TF4OT.evals.NOT import NOT_toy_1D_cost_weak, NOT_toy_1D_cost_strong
 import ot.plot
 import matplotlib.pylab as pl
 import matplotlib.pyplot as plt
@@ -113,9 +114,13 @@ def inference_routine(cfg):
 
     # Limit test batches if not testing full dataset
     if hasattr(cfg.inference, 'test_over_testset') and cfg.inference.test_over_testset:
-
+        logger.info(f"{'='*80}")
+        logger.info("Starting testset evaluation...")
+        logger.info(f"{'='*80}\n")
         eval_all_testset(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path,
                         test_batches=test_loader, device=device, model_name=model_name)
+
+
 
 def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=None,
                      test_batches=None, device=None, model_name=None):
@@ -748,46 +753,6 @@ def load_model_by_name(model_base_path: str, device: str = "cuda"):
 
     return pytorch_model, tokenizer
 
-def hist_from_samples(X_sampler, Y_sampler, bins=80, sample_size = 100_000, density=False, trim_percentiles=(0.5, 99.5)):
-    """
-    Returns:
-        counts_X: (bins,) histogram for X
-        counts_Y: (bins,) histogram for Y
-        bin_edges: (bins+1,) shared edges
-    """
-    # Sample
-    X = X_sampler.sample(sample_size)
-    Y = Y_sampler.sample(sample_size)
-
-    # To flat numpy
-    def to_1d_np(t):
-        if isinstance(t, torch.Tensor):
-            t = t.detach().cpu().numpy()
-        return np.asarray(t).reshape(-1)
-
-    X_np = to_1d_np(X)
-    Y_np = to_1d_np(Y)
-
-    # Shared bin edges (optionally trimmed for stability)
-    if trim_percentiles is not None:
-        p_lo, p_hi = trim_percentiles
-        lo = np.percentile(np.concatenate([X_np, Y_np]), p_lo)
-        hi = np.percentile(np.concatenate([X_np, Y_np]), p_hi)
-        rng = (lo, hi)
-    else:
-        lo = np.min([X_np.min(), Y_np.min()])
-        hi = np.max([X_np.max(), Y_np.max()])
-        rng = (lo, hi)
-
-    bin_edges = np.linspace(rng[0], rng[1], bins + 1)
-
-    # Histograms with shared edges
-    counts_X, _ = np.histogram(X_np, bins=bin_edges, density=density)
-    probsX = counts_X / counts_X.sum()     # sums to 1 exactly (ignores out-of-range)
-    counts_Y, _ = np.histogram(Y_np, bins=bin_edges, density=density)
-    probsY = counts_Y / counts_Y.sum()     # sums to 1 exactly (ignores out-of-range)
-    return probsX, probsY, bin_edges
-
 def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenizer=None, model_base_path=None):
 
     """
@@ -807,7 +772,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
             self.name = name or "NumpySampler"
         def sample(self, n):
             x = self.fn(n).astype(np.float32)
-            return torch.from_numpy(x).view(-1, 1)  # (n, 1)
+            return torch.from_numpy(x).view(-1, 1).to(device)  # (n, 1)
 
     def zscore(x, eps=1e-8):
         x = (x - x.mean()) / (x.std() + eps)
@@ -925,8 +890,6 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Collect results across trials
-    all_results = []
-    all_figures = []  # Store figures for notebook
     n_samples   = 1_000_000
     n_bins      = cfg.data.dataset.support_size
     # check encoder C in config
@@ -934,16 +897,17 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
     row_wise    = cfg.data.dataset.row_wise
 
     if cost_type == 'fixed':
-        metrics = ['canberra']
+        metrics = [cfg.data.dataset.input_cost_metric]
     elif cost_type == 'semivariable':
-        metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
+        metrics = utils.metrics
     elif cost_type == 'variable':
-        metrics = ['sqeuclidean']
+        metrics = [cfg.data.dataset.input_cost_metric]
 
     # Evaluate distribution pairs in the matrix
     for metric in metrics:
         logger.info(f"Evaluating metric: {metric}")
-        all_results = []
+        all_results_tot = []
+        all_results_not = []
         all_figures = []
 
         for i in range(sampler_pairs_matrix.shape[0]):
@@ -953,14 +917,15 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 Y_sampler = sampler_pairs_matrix[i, j][1]
                 idx = i * sampler_pairs_matrix.shape[1] + j
                 logger.info(f"Evaluating pair {idx+1}/{sampler_pairs_matrix.shape[0] * sampler_pairs_matrix.shape[1]}: {X_sampler.name} -> {Y_sampler.name}")
-                source, target, _ = hist_from_samples(
-                    X_sampler, Y_sampler, bins=n_bins, sample_size=n_samples, density=False
-                )
+
+                # Sample + histogram
+                source_sample = X_sampler.sample(n_samples)
+                target_sample = Y_sampler.sample(n_samples)
+                source, target, rng = utils.hist_from_samples(source_sample, target_sample, bins=n_bins, density=False)
 
                 # Define support points
                 if cost_type == 'fixed':
                     # fixed C case
-                    metric = 'canberra'
                     xs = np.zeros((n_bins, 2))
                     xt = np.zeros((n_bins, 2))
                     xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
@@ -973,7 +938,6 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                     # one-hot encode the current metric
                     metric_one_hot = [1.0 if m == metric else 0.0 for m in metrics]
                 elif cost_type == 'variable':
-                    metric = 'sqeuclidean'
                     # n_bins defined elsewhere
                     x_low = 0; x_high = n_bins
                     # integers from [x_low, x_high) -> 0 to 9
@@ -1032,7 +996,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                     encoder_input_c = torch.stack(encoder_input_c).to(device)
                 elif cost_type == 'variable':
                     encoder_input_c = torch.stack(encoder_input_c).to(device)
-
+                ####################################################################################################################################  OUR METHOD (TOT)
                 # Run model INFERENCE
                 text_ids_pred = pytorch_model.generate(
                     encoder_input_ab = encoder_input_ab,
@@ -1049,54 +1013,86 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 #print( "text_pred_dense: ", text_pred_dense)
                 ot_pred_dense = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
                 ot_pred_dense_torch = torch.from_numpy(ot_pred_dense)
-                print( "ot_pred_dense: \n", ot_pred_dense_torch)
                 # build sparse matrix directly
                 ot_pred_sparse = sparse.coo_matrix(
                     ot_pred_dense, shape=otplan_solve_sparse.shape
                 )
-
-                # Calculate MAE diff
-                #abs_diff_dense  = sklearn.metrics.mean_absolute_error(otplan_solve_dense.flatten(), ot_pred_dense.flatten())
-                mae_diff_sparse  = utils.sparse_mean_abs_error(otplan_solve_sparse, ot_pred_sparse)
-                # Calculate MAPE diff
-                mape_diff_sparse = utils.sparse_mean_abs_percentage_error(otplan_solve_sparse, ot_pred_sparse)
-                # Calculate Hellinger diff
-                hellinger_diff_sparse = utils.sparse_hellinger_distance(otplan_solve_sparse, ot_pred_sparse)
-                # Calculate OT cost diff
-                otcost_gt     = otplan_solve.value
-                otcost_pred   = (ot_pred_dense * C).sum()
-                otcost_diff   = abs(otcost_pred - otcost_gt)
-                # Calculate Total Variation diff
-                tv_diff_sparse = utils.sparse_total_variation(otplan_solve_sparse, ot_pred_sparse)
+                print( "ot_pred_sparse: \n", ot_pred_sparse)
+                print( "ot_gt_sparse: \n", otplan_solve_sparse)
 
                 # Compute metrics
-                ot_plan_pred = ot_pred_dense
-                ot_plan_gt   = otplan_solve_dense
+                # MAE
+                #abs_diff_dense = sklearn.metrics.mean_absolute_error(otplan_solve_dense.flatten(), ot_pred_dense.flatten())
+                mae_sparse_tot  = utils.sparse_mean_abs_error(otplan_solve_sparse, ot_pred_sparse)
+                # MAPE
+                #mape_diff_sparse = utils.sparse_mean_abs_percentage_error(otplan_solve_sparse, ot_pred_sparse)
+                mape_sparse_tot = utils.sparse_weighted_mean_abs_percentage_error(otplan_solve_sparse, ot_pred_sparse)
+                # Hellinger
+                hellinger_sparse_tot = utils.sparse_hellinger_distance(otplan_solve_sparse, ot_pred_sparse)
+                # OT cost diff
+                otcost_gt     = otplan_solve.value
+                otcost_pred   = (ot_pred_dense * C).sum()
+                otcost_diff_tot   = abs(otcost_pred - otcost_gt)
+                # Total Variation
+                tv_sparse_tot = utils.sparse_total_variation(otplan_solve_sparse, ot_pred_sparse)
 
-                all_results.append({
-                    'source': X_sampler.name,
-                    'target': Y_sampler.name,
-                    'otcost_diff': otcost_diff,
-                    'mae_diff_sparse': mae_diff_sparse,
-                    'mape_diff_sparse': mape_diff_sparse,
-                    'hellinger_diff_sparse': hellinger_diff_sparse,
-                    'tv_diff_sparse': tv_diff_sparse
+                all_results_tot.append({
+                    'source':           X_sampler.name,
+                    'target':           Y_sampler.name,
+                    'otcost_diff':      otcost_diff_tot,
+                    'mae_sparse':       mae_sparse_tot,
+                    'mape_sparse':      mape_sparse_tot,
+                    'hellinger_sparse': hellinger_sparse_tot,
+                    'tv_sparse':        tv_sparse_tot
                 })
+                ####################################################################################################################################  NEURAL OT (NOT)
+                if cfg.inference.test_neural_ot:
+                    #_, ot_plan_not_dense = NOT_toy_1D_cost_weak.main_routine(X_sampler, Y_sampler, n_bins)
+                    _, ot_plan_not_dense = NOT_toy_1D_cost_strong.main_routine(X_sampler, Y_sampler, n_bins, rng)
+                    ot_plan_not_sparse = sparse.coo_matrix(
+                        ot_plan_not_dense,
+                        shape=otplan_solve_sparse.shape
+                    )
+                    # Compute metrics
+                    # MAE
+                    mae_sparse_not  = utils.sparse_mean_abs_error(otplan_solve_sparse, ot_plan_not_sparse)
+                    # MAPE
+                    mape_sparse_not = utils.sparse_weighted_mean_abs_percentage_error(otplan_solve_sparse, ot_plan_not_sparse)
+                    # Hellinger
+                    hellinger_sparse_not = utils.sparse_hellinger_distance(otplan_solve_sparse, ot_plan_not_sparse)
+                    # OT cost diff
+                    otcost_gt     = otplan_solve.value
+                    otcost_pred   = (ot_plan_not_dense * C).sum()
+                    otcost_diff_not  = abs(otcost_pred - otcost_gt)
+                    # Total Variation
+                    tv_sparse_not = utils.sparse_total_variation(otplan_solve_sparse, ot_plan_not_sparse)
+
+                    all_results_not.append({
+                        'source':           X_sampler.name,
+                        'target':           Y_sampler.name,
+                        'otcost_diff':      otcost_diff_not,
+                        'mae_sparse':       mae_sparse_not,
+                        'mape_sparse':      mape_sparse_not,
+                        'hellinger_sparse': hellinger_sparse_not,
+                        'tv_sparse':        tv_sparse_not
+                    })
+                ####################################################################################################################################  PLOTTING RESULTS of BOTH METHODS
 
                 # Create visualization
-                fig, axarr = plt.subplots(1, 6, figsize=(20, 3.5), dpi=120)
+                fig, axarr = plt.subplots(1, 7, figsize=(20, 3.5), dpi=120)
                 fig.suptitle(f"{X_sampler.name} → {Y_sampler.name}", fontsize=16, y=1.02)
 
                 # Titles
                 axarr[0].set_title(f"Source $\\mu$ (1D)", fontsize=12)
                 axarr[1].set_title(f"Target $\\nu$ (1D)", fontsize=12)
                 axarr[2].set_title(f"Cost Matrix: {metric}", fontsize=12)
-                axarr[3].set_title(r"$\pi$ Ground Truth (POT)", fontsize=12)
-                axarr[4].set_title(r"$\hat{\pi}$ Ours (TOT)", fontsize=12)
+                axarr[3].set_title(r"$\pi$ Ground Truth (Python OT)", fontsize=12)
+                axarr[4].set_title(r"$\hat{\pi}$ Ours (Transformers OT)", fontsize=12)
+                axarr[5].set_title(r"$\hat{\pi}$ Neural OT", fontsize=12)
 
                 # Common vmin/vmax for OT plans
                 vmin = 0
-                vmax = max(np.max(ot_plan_pred), np.max(ot_plan_gt))
+                vmax = max(np.max(ot_pred_dense), np.max(otplan_solve_dense))
 
                 # --- Source (bar) ---
                 bin_edges = np.arange(len(source))
@@ -1127,7 +1123,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
 
                 # --- Ground truth ---
-                im3 = axarr[3].imshow(ot_plan_gt, cmap='Blues', vmin=vmin, vmax=vmax, 
+                im3 = axarr[3].imshow(otplan_solve_dense, cmap='Blues', vmin=vmin, vmax=vmax, 
                                     origin='lower', aspect="auto")
                 axarr[3].set_xlabel("Target bins")
                 axarr[3].set_ylabel("Source bins")
@@ -1137,8 +1133,8 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                             facecolor='white', alpha=0.8))
                 plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
 
-                # --- Model Prediction ---
-                im4 = axarr[4].imshow(ot_plan_pred, cmap='Reds', vmin=vmin, vmax=vmax,
+                # --- Our Model Prediction ---
+                im4 = axarr[4].imshow(ot_pred_dense, cmap='Reds', vmin=vmin, vmax=vmax,
                                     origin='lower', aspect="auto")
                 axarr[4].set_xlabel("Target bins")
                 axarr[4].set_ylabel("Source bins")
@@ -1148,23 +1144,33 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                             facecolor='white', alpha=0.8))
                 plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
 
+                # --- NOT Model Prediction ---
+                im5 = axarr[5].imshow(ot_plan_not_dense, cmap='Purples', vmin=vmin, vmax=vmax, origin='lower', aspect="auto")
+                axarr[5].set_xlabel("Target bins")
+                axarr[5].set_ylabel("Source bins")
+                axarr[5].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_plan_not_sparse.sum():.5f}$',
+                            transform=axarr[5].transAxes, fontsize=10,
+                            verticalalignment='top', bbox=dict(boxstyle='round',
+                            facecolor='white', alpha=0.8))
+                plt.colorbar(im5, ax=axarr[5], fraction=0.046, pad=0.04)
+
                 # --- Model Prediction on Dataset (samples + plan on axarr[5]) ---
                 # Make axarr[5] the current axis so plot2D_samples_mat draws there
-                plt.sca(axarr[5])
+                plt.sca(axarr[6])
                 # set title
                 pl.title("Support points (1D)")
-                ot.plot.plot2D_samples_mat(xs, xt, ot_plan_pred, c=[0.5, 0.5, 1])
+                ot.plot.plot2D_samples_mat(xs, xt, ot_pred_dense, c=[0.5, 0.5, 1])
                 pl.plot(xs[:, 0], xs[:, 1], "+b", label="Source")
                 pl.plot(xt[:, 0], xt[:, 1], "xr", label="Target")
                 pl.legend(loc="best")
                 pl.axis("equal")
 
                 # Add error metrics text
-                fig.text(0.5, -0.02, f'MAE (sparse): {mae_diff_sparse:.3e}  |  ' +
-                        f'MAPE (sparse): {mape_diff_sparse:.3e}  |  ' +
-                        f'Hellinger (sparse): {hellinger_diff_sparse:.3e}  |  ' +
-                        f'TV (sparse): {tv_diff_sparse:.3e}  |  ' +
-                        f'OT Cost Diff: {otcost_diff:.3e}',
+                fig.text(0.5, -0.02, f'MAE (sparse): {mae_sparse_tot:.3e}  |  ' +
+                        f'MAPE (sparse): {mape_sparse_tot:.3e}  |  ' +
+                        f'Hellinger (sparse): {hellinger_sparse_tot:.3e}  |  ' +
+                        f'TV (sparse): {tv_sparse_tot:.3e}  |  ' +
+                        f'OT Cost Diff: {otcost_diff_tot:.3e}',
                         ha='center', fontsize=11, bbox=dict(boxstyle='round',
                         facecolor='lightyellow', alpha=0.8))
 
@@ -1187,25 +1193,25 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         col_names = [sampler_pairs_matrix[0, j][1].name for j in range(n_cols)]
 
         # Create result matrices
-        otcost_diff_matrix     = np.zeros((n_rows, n_cols))
-        mae_diff_sparse_matrix = np.zeros((n_rows, n_cols))
-        mape_diff_sparse_matrix = np.zeros((n_rows, n_cols))
-        hellinger_diff_sparse_matrix = np.zeros((n_rows, n_cols))
-        tv_diff_sparse_matrix = np.zeros((n_rows, n_cols))
+        otcost_diff_matrix      = np.zeros((n_rows, n_cols))
+        mae_sparse_matrix       = np.zeros((n_rows, n_cols))
+        mape_sparse_matrix      = np.zeros((n_rows, n_cols))
+        hellinger_sparse_matrix = np.zeros((n_rows, n_cols))
+        tv_sparse_matrix        = np.zeros((n_rows, n_cols))
 
         # Fill matrices from all_results (results are stored in row-major order)
-        for idx, r in enumerate(all_results):
+        for idx, r in enumerate(all_results_tot):
             i = idx // n_cols
             j = idx % n_cols
-            otcost_diff_matrix[i, j]            = r['otcost_diff']
-            mae_diff_sparse_matrix[i, j]        = r['mae_diff_sparse']
-            mape_diff_sparse_matrix[i, j]       = r['mape_diff_sparse']
-            hellinger_diff_sparse_matrix[i, j]  = r['hellinger_diff_sparse']
-            tv_diff_sparse_matrix[i, j]         = r['tv_diff_sparse']
+            otcost_diff_matrix[i, j]       = r['otcost_diff']
+            mae_sparse_matrix[i, j]        = r['mae_sparse']
+            mape_sparse_matrix[i, j]       = r['mape_sparse']
+            hellinger_sparse_matrix[i, j]  = r['hellinger_sparse']
+            tv_sparse_matrix[i, j]         = r['tv_sparse']
 
-        # Create OT Cost Diff squared table
+        # Create OT Cost Diff table
         logger.info("\n" + "="*80)
-        logger.info("SQUARED TABLE: OT COST DIFF")
+        logger.info("OT COST DIFF")
         logger.info("="*80)
 
         # Prepare table data with row names
@@ -1218,77 +1224,77 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         otcost_table_str = tabulate(otcost_table_data, headers=otcost_headers, tablefmt='grid', floatfmt=".3e")
         logger.info("\n" + otcost_table_str)
         
-        # Create MAE Diff (sparse) squared table
+        # Create MAE (sparse) table
         logger.info("\n" + "="*80)
-        logger.info("SQUARED TABLE: MAE DIFF (SPARSE)")
+        logger.info("MAE (SPARSE)")
         logger.info("="*80)
         
         # Prepare table data with row names
-        mae_diff_sparse_table_data = [] 
+        mae_sparse_table_data = [] 
         for i, row_name in enumerate(row_names):
-            row = [row_name] + [f"{mae_diff_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
-            mae_diff_sparse_table_data.append(row)
+            row = [row_name] + [f"{mae_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
+            mae_sparse_table_data.append(row)
         
-        mae_diff_sparse_headers = ['Source \\ Target'] + col_names
-        mae_diff_sparse_table_str = tabulate(mae_diff_sparse_table_data, headers=mae_diff_sparse_headers, tablefmt='grid', floatfmt=".3e")
-        logger.info("\n" + mae_diff_sparse_table_str)
+        mae_sparse_headers = ['Source \\ Target'] + col_names
+        mae_sparse_table_str = tabulate(mae_sparse_table_data, headers=mae_sparse_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + mae_sparse_table_str)
         
-        # Create MAPE Diff (Sparse) squared table
+        # Create MAPE (sparse) table
         logger.info("\n" + "="*80)
-        logger.info("SQUARED TABLE: MAPE DIFF (SPARSE)")
+        logger.info("MAPE (SPARSE)")
         logger.info("="*80)
         
         # Prepare table data with row names
-        mape_diff_sparse_table_data = []    
+        mape_sparse_table_data = []    
         for i, row_name in enumerate(row_names):
-            row = [row_name] + [f"{mape_diff_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
-            mape_diff_sparse_table_data.append(row)
+            row = [row_name] + [f"{mape_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
+            mape_sparse_table_data.append(row)
         
-        mape_diff_sparse_headers = ['Source \\ Target'] + col_names
-        mape_diff_sparse_table_str = tabulate(mape_diff_sparse_table_data, headers=mape_diff_sparse_headers, tablefmt='grid', floatfmt=".3e")
-        logger.info("\n" + mape_diff_sparse_table_str)
+        mape_sparse_headers = ['Source \\ Target'] + col_names
+        mape_sparse_table_str = tabulate(mape_sparse_table_data, headers=mape_sparse_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + mape_sparse_table_str)
 
-        # Create Hellinger Diff (Sparse) squared table
+        # Create Hellinger (sparse) table
         logger.info("\n" + "="*80)
-        logger.info("SQUARED TABLE: HELLINGER DIFF (SPARSE)")
+        logger.info("HELLINGER (SPARSE)")
         logger.info("="*80)
         
         # Prepare table data with row names
-        hellinger_diff_sparse_table_data = []
+        hellinger_sparse_table_data = []
         for i, row_name in enumerate(row_names):
-            row = [row_name] + [f"{hellinger_diff_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
-            hellinger_diff_sparse_table_data.append(row)
+            row = [row_name] + [f"{hellinger_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
+            hellinger_sparse_table_data.append(row)
         
-        hellinger_diff_sparse_headers = ['Source \\ Target'] + col_names
-        hellinger_diff_sparse_table_str = tabulate(hellinger_diff_sparse_table_data, headers=hellinger_diff_sparse_headers, tablefmt='grid', floatfmt=".3e")
-        logger.info("\n" + hellinger_diff_sparse_table_str)
+        hellinger_sparse_headers = ['Source \\ Target'] + col_names
+        hellinger_sparse_table_str = tabulate(hellinger_sparse_table_data, headers=hellinger_sparse_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + hellinger_sparse_table_str)
 
-        # Create TV Diff (Sparse) squared table
+        # Create TV (sparse) table
         logger.info("\n" + "="*80)
-        logger.info("SQUARED TABLE: TV DIFF (SPARSE)")
+        logger.info("TV (SPARSE)")
         logger.info("="*80)
         
         # Prepare table data with row names
-        tv_diff_sparse_table_data = []
+        tv_sparse_table_data = []
         for i, row_name in enumerate(row_names):
-            row = [row_name] + [f"{tv_diff_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
-            tv_diff_sparse_table_data.append(row)
+            row = [row_name] + [f"{tv_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
+            tv_sparse_table_data.append(row)
         
-        tv_diff_sparse_headers = ['Source \\ Target'] + col_names
-        tv_diff_sparse_table_str = tabulate(tv_diff_sparse_table_data, headers=tv_diff_sparse_headers, tablefmt='grid', floatfmt=".3e")
-        logger.info("\n" + tv_diff_sparse_table_str)
+        tv_sparse_headers = ['Source \\ Target'] + col_names
+        tv_sparse_table_str = tabulate(tv_sparse_table_data, headers=tv_sparse_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + tv_sparse_table_str)
 
         # Prepare summary table data
-        table_data = []
-        for r in all_results:
-            table_data.append([
+        table_data_tot = []
+        for r in all_results_tot:
+            table_data_tot.append([
                 r['source'],
                 r['target'],
                 f"{r['otcost_diff']:.3e}",
-                f"{r['mae_diff_sparse']:.3e}",
-                f"{r['mape_diff_sparse']:.3e}",
-                f"{r['hellinger_diff_sparse']:.3e}",
-                f"{r['tv_diff_sparse']:.3e}"
+                f"{r['mae_sparse']:.3e}",
+                f"{r['mape_sparse']:.3e}",
+                f"{r['hellinger_sparse']:.3e}",
+                f"{r['tv_sparse']:.3e}"
             ])
 
         headers = ['Source', 'Target', 'OT Cost Diff', 'MAE (sparse)', 'MAPE (sparse)', 'Hellinger (sparse)', 'TV (sparse)']
@@ -1297,8 +1303,70 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         logger.info("\n" + "="*80)
         logger.info("SUMMARY OF RESULTS")
         logger.info("="*80)
-        table_str_terminal = tabulate(table_data, headers=headers, tablefmt='grid', floatfmt=".3e")
+        table_str_terminal = tabulate(table_data_tot, headers=headers, tablefmt='grid', floatfmt=".3e")
         logger.info("\n" + table_str_terminal)
+
+        # Create Box Plot Summary
+        logger.info("\n" + "="*80)
+        logger.info("Generating Box Plot Summary")
+        logger.info("="*80)
+
+        # Extract data for box plots
+        metrics_to_plot = {
+            'OT Cost Diff': ([r['otcost_diff'] for r in all_results_tot], [r['otcost_diff'] for r in all_results_not]),
+            'MAE (Sparse)': ([r['mae_sparse'] for r in all_results_tot], [r['mae_sparse'] for r in all_results_not]),
+            'MAPE (Sparse)': ([r['mape_sparse'] for r in all_results_tot], [r['mape_sparse'] for r in all_results_not]),
+            'Hellinger (Sparse)': ([r['hellinger_sparse'] for r in all_results_tot], [r['hellinger_sparse'] for r in all_results_not]),
+            'TV (Sparse)': ([r['tv_sparse'] for r in all_results_tot], [r['tv_sparse'] for r in all_results_not])
+        }
+
+        fig_box, axes_box = plt.subplots(1, 5, figsize=(20, 5), dpi=120)
+        fig_box.suptitle(f"Custom Distribution Pairs Summary - {metric}", fontsize=16, y=1.05)
+        
+        for idx, (m_name, (data_tot, data_not)) in enumerate(metrics_to_plot.items()):
+            ax = axes_box[idx]
+            
+            # Prepare plotting data
+            plot_data = []
+            labels = []
+            colors = []
+            
+            if len(data_tot) > 0:
+                plot_data.append(data_tot)
+                labels.append('Ours (TOT)')
+                colors.append('indianred')
+            
+            if len(data_not) > 0:
+                plot_data.append(data_not)
+                labels.append('NOT')
+                colors.append('lavender')
+                
+            if not plot_data:
+                continue
+
+            bplot = ax.boxplot(plot_data, vert=True, patch_artist=True, labels=labels,
+                               medianprops=dict(color="mistyrose"))
+            
+            # Color boxes
+            for patch, color in zip(bplot['boxes'], colors):
+                patch.set_facecolor(color)
+
+            ax.set_title(m_name, fontsize=12, fontweight='bold')
+            ax.grid(True, linestyle='--', alpha=0.6)
+            
+            # Add basic stats text for TOT (optional, simplified)
+            if len(data_tot) > 0:
+                m_mean = np.mean(data_tot)
+                ax.text(0.95, 0.95, f"TOT Mean: {m_mean:.2e}", 
+                        transform=ax.transAxes, verticalalignment='top', horizontalalignment='right',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, pad=0.3))
+
+            if len(data_not) > 0:
+                m_mean = np.mean(data_not)
+                ax.text(0.95, 0.95, f"NOT Mean: {m_mean:.2e}", 
+                        transform=ax.transAxes, verticalalignment='top', horizontalalignment='right',
+                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, pad=0.3))
+        plt.tight_layout()
 
         # Create Jupyter notebook with results
         logger.info("\n" + "="*80)
@@ -1310,31 +1378,54 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
 
         # Add title cell
         # add total distributions evaluated
-        cells.append(new_markdown_cell(f"# Transformers for Optimal Transport (TOT): Evaluation Results - Metric: {metric}\n\n"
+        cells.append(new_markdown_cell(f"# Transformers for Optimal Transport (TOT): Custom distribution pairs - Metric: {metric}\n\n"
                                     f"Model: {model_base_path}\n\n"
                                     f"Dataset: {cfg.data.hf_dataset}\n\n"
                                     f"Dataset size: {cfg.data.dataset.size_s}\n\n"
                                     f"Support size (n_bins): {n_bins}\n\n"
                                     f"Total distributions evaluated: {len(list_distributions)}\n\n"
-                                    f"Total pairs evaluated: {len(all_results)}"))
+                                    f"Total pairs evaluated: {len(all_results_tot)}"))
 
-        # Add squared tables to notebook
+        # Add tables to notebook
         cells.append(new_markdown_cell("## Summary tables"))
         cells.append(new_markdown_cell("### OT Cost Diff"))
         otcost_table_str_notebook = tabulate(otcost_table_data, headers=otcost_headers, tablefmt='pipe', floatfmt=".3e")
         cells.append(new_markdown_cell(otcost_table_str_notebook))
         cells.append(new_markdown_cell("### MAE (Sparse)"))
-        mae_diff_sparse_table_str_notebook = tabulate(mae_diff_sparse_table_data, headers=mae_diff_sparse_headers, tablefmt='pipe', floatfmt=".3e")
-        cells.append(new_markdown_cell(mae_diff_sparse_table_str_notebook))
+        mae_sparse_table_str_notebook = tabulate(mae_sparse_table_data, headers=mae_sparse_headers, tablefmt='pipe', floatfmt=".3e")
+        cells.append(new_markdown_cell(mae_sparse_table_str_notebook))
         cells.append(new_markdown_cell("### MAPE (Sparse)"))
-        mape_diff_sparse_table_str_notebook = tabulate(mape_diff_sparse_table_data, headers=mape_diff_sparse_headers, tablefmt='pipe', floatfmt=".3e")
-        cells.append(new_markdown_cell(mape_diff_sparse_table_str_notebook))
+        mape_sparse_table_str_notebook = tabulate(mape_sparse_table_data, headers=mape_sparse_headers, tablefmt='pipe', floatfmt=".3e")
+        cells.append(new_markdown_cell(mape_sparse_table_str_notebook))
         cells.append(new_markdown_cell("### Hellinger (Sparse)"))
-        hellinger_diff_sparse_table_str_notebook = tabulate(hellinger_diff_sparse_table_data, headers=hellinger_diff_sparse_headers, tablefmt='pipe', floatfmt=".3e")
-        cells.append(new_markdown_cell(hellinger_diff_sparse_table_str_notebook))
+        hellinger_sparse_table_str_notebook = tabulate(hellinger_sparse_table_data, headers=hellinger_sparse_headers, tablefmt='pipe', floatfmt=".3e")
+        cells.append(new_markdown_cell(hellinger_sparse_table_str_notebook))
         cells.append(new_markdown_cell("### TV (Sparse)"))
-        tv_diff_sparse_table_str_notebook = tabulate(tv_diff_sparse_table_data, headers=tv_diff_sparse_headers, tablefmt='pipe', floatfmt=".3e")
-        cells.append(new_markdown_cell(tv_diff_sparse_table_str_notebook))
+        tv_sparse_table_str_notebook = tabulate(tv_sparse_table_data, headers=tv_sparse_headers, tablefmt='pipe', floatfmt=".3e")
+        cells.append(new_markdown_cell(tv_sparse_table_str_notebook))
+
+        # Add Box Plot to notebook
+        cells.append(new_markdown_cell("## Results Distribution (Box Plots)"))
+
+        # Convert box plot figure to base64
+        buf = BytesIO()
+        fig_box.savefig(buf, format='png', bbox_inches='tight', dpi=120)
+        buf.seek(0)
+        img_base64_box = base64.b64encode(buf.read()).decode('utf-8')
+        buf.close()
+        plt.close(fig_box)
+
+        # Create code cell for box plot
+        cell_box = new_code_cell("")
+        cell_box.outputs = [
+            nbformat.v4.new_output(
+                output_type='display_data',
+                data={'image/png': img_base64_box},
+                metadata={}
+            )
+        ]
+        cells.append(cell_box)
+
 
         # Add each figure as embedded image
         cells.append(new_markdown_cell("## Individual Results"))
@@ -1379,7 +1470,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         logger.info(f"Saved notebook to: {notebook_path}")
         logger.info(f"Open with: jupyter notebook {notebook_path}")
 
-    return all_results
+    return all_results_tot, all_results_not
 
 
 @hydra.main(version_base=None, config_path="configs", config_name="config")
