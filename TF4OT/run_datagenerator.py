@@ -91,7 +91,7 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
         xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
         metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
         # Define cost matrix    
-        C = ot.dist(xs, xt, metric=metric)
+        C = ot.dist(xs, xt, metric=metric, use_tensor=True, p=3)
         C /= C.max()
 
     print("Computing optimal transport maps and yielding samples...")
@@ -103,7 +103,7 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             # integers from [x_low, x_high) -> 0 to 9
             xs = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
             xt = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
-            C = ot.dist(xs, xt, metric=metric)
+            C = ot.dist(xs, xt, metric=metric, use_tensor=True, p=3)
             C = C / C.max() # avoid casting errors later
         elif cost_type == 'semivariable':
             xs = np.zeros((n_bins, 2))
@@ -115,7 +115,7 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             # one-hot encode the chosen metric
             #print("metric:", metric)
             metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
-            C = ot.dist(xs, xt, metric=metric)
+            C = ot.dist(xs, xt, metric=metric, use_tensor=True, p=3)
             C /= C.max()
         # Sparse plan
         # otplan_emd_sparse = ot.emd_1d(

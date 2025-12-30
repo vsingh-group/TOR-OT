@@ -31,13 +31,13 @@
             "python": "/home/ivan/anaconda3/envs/env_TF4OT/bin/python",
             "env": {
                 //"PYTHONPATH": "${workspaceFolder}",
-                "CUDA_VISIBLE_DEVICES": "6",
+                "CUDA_VISIBLE_DEVICES": "2",
                 //"CUDA_LAUNCH_BLOCKING":"1",
                 //"TORCH_SHOW_CPP_STACKTRACES":"1"
             },
             "args": [
                 "--config-name",
-                "TF_100K_cost_fixed"
+                "TF_100K_cost_semivariable"
             ]
         },
         {

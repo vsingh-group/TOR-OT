@@ -26,6 +26,7 @@ from tabulate import tabulate
 import base64
 from io import BytesIO
 import itertools
+import time
 
 # Add Hydra imports
 import hydra
@@ -763,121 +764,158 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         pytorch_model: Pre-loaded model (optional). If None, will load from config.
         tokenizer: Pre-loaded tokenizer (optional). If None, will load from config.
     """
-    import matplotlib.pyplot as plt
-    import ot
     # --- tiny adapter to match hist_from_samplers API ---
-    class NumpySampler:
+    class TorchSampler:
         def __init__(self, fn, name=None):
-            self.fn = fn  # fn(n) -> np.ndarray of shape (n,)
-            self.name = name or "NumpySampler"
+            self.fn = fn  # fn(n) -> torch.Tensor of shape (n,)
+            self.name = name or "TorchSampler"
         def sample(self, n):
-            x = self.fn(n).astype(np.float32)
-            return torch.from_numpy(x).view(-1, 1).to(device)  # (n, 1)
+            x = self.fn(n).float()
+            return x.view(-1, 1).to(device)  # (n, 1)
 
     def zscore(x, eps=1e-8):
         x = (x - x.mean()) / (x.std() + eps)
         return x
 
-    # --- distribution factories (all return NumpySampler with a .name) ---
+    # --- distribution factories (all return TorchSampler with a .name) ---
     def BetaLeft(a=2.0, b=5.0):
-        return NumpySampler(lambda n: zscore(np.random.beta(a, b, size=n)),
+        # Beta is on [0, 1]
+        m = torch.distributions.Beta(torch.tensor([a]), torch.tensor([b]))
+        return TorchSampler(lambda n: zscore(m.sample((n,)).view(-1)),
                             name=f"BetaLeft")
 
     def BetaRight(a=5.0, b=2.0):
-        return NumpySampler(lambda n: zscore(np.random.beta(a, b, size=n)),
+        m = torch.distributions.Beta(torch.tensor([a]), torch.tensor([b]))
+        return TorchSampler(lambda n: zscore(m.sample((n,)).view(-1)),
                             name=f"BetaRight")
 
     def LogNormal(mu=0.0, sigma=0.5):
-        return NumpySampler(lambda n: zscore(np.random.lognormal(mean=mu, sigma=sigma, size=n)),
+        m = torch.distributions.LogNormal(torch.tensor([mu]), torch.tensor([sigma]))
+        return TorchSampler(lambda n: zscore(m.sample((n,)).view(-1)),
                             name=f"LogNormal")
 
     def Laplace(loc=0.0, scale=1.0):
-        return NumpySampler(lambda n: zscore(np.random.laplace(loc, scale, size=n)),
+        m = torch.distributions.Laplace(torch.tensor([loc]), torch.tensor([scale]))
+        return TorchSampler(lambda n: zscore(m.sample((n,)).view(-1)),
                             name=f"Laplace")
 
     def StudentT(df=3):
-        return NumpySampler(lambda n: zscore(np.random.standard_t(df, size=n)),
+        m = torch.distributions.StudentT(torch.tensor([float(df)]))
+        return TorchSampler(lambda n: zscore(m.sample((n,)).view(-1)),
                             name=f"StudentT")
 
     def CauchyTrunc(x0=0.0, gamma=1.0, clip=6.0):
+        m = torch.distributions.Cauchy(torch.tensor([x0]), torch.tensor([gamma]))
         def _f(n):
-            x = np.random.standard_cauchy(size=n) * gamma + x0
-            x = np.clip(x, -clip, clip)
+            x = m.sample((n,)).view(-1)
+            x = torch.clamp(x, -clip, clip)
             return zscore(x)
-        return NumpySampler(_f, name=f"CauchyTrunc")
+        return TorchSampler(_f, name=f"CauchyTrunc")
 
     def Triangular(left=-2.0, mode=0.0, right=2.0):
-        return NumpySampler(lambda n: zscore(np.random.triangular(left, mode, right, size=n)),
-                            name=f"Triangular")
+        def _f(n):
+            u = torch.rand(n)
+            # Inverse transform sampling
+            c = (mode - left) / (right - left)
+            x = torch.zeros_like(u)
+            mask = u < c
+            # u < (mode-left)/(right-left)
+            # x = left + sqrt(u * (right-left) * (mode-left))
+            if mask.any():
+                x[mask] = left + torch.sqrt(u[mask] * (right - left) * (mode - left))
+            if (~mask).any():
+                x[~mask] = right - torch.sqrt((1 - u[~mask]) * (right - left) * (right - mode))
+            return zscore(x)
+        return TorchSampler(_f, name=f"Triangular")
 
     def UniformLowHigh(low=-2.0, high=2.0):
-        return NumpySampler(lambda n: zscore(np.random.uniform(low, high, size=n)),
+        return TorchSampler(lambda n: zscore(torch.rand(n) * (high - low) + low),
                             name=f"Uniform")
 
     def GaussianShifted(mu=1.5, sigma=1.0):
-        return NumpySampler(lambda n: zscore(np.random.normal(mu, sigma, size=n)),
+        return TorchSampler(lambda n: zscore(torch.randn(n) * sigma + mu),
                             name=f"GaussianShifted")
 
     def GaussianMixture(means=(-2.0, 2.0), sigmas=(0.7, 0.7), weights=(0.5, 0.5)):
-        means, sigmas, weights = np.array(means), np.array(sigmas), np.array(weights)
-        weights = weights / weights.sum()
+        t_means = torch.tensor(means).float()
+        t_sigmas = torch.tensor(sigmas).float()
+        t_weights = torch.tensor(weights).float()
+        t_weights = t_weights / t_weights.sum()
         def _f(n):
-            comps = np.random.choice(len(weights), size=n, p=weights)
-            x = np.random.normal(loc=means[comps], scale=sigmas[comps])
+            comps = torch.multinomial(t_weights, n, replacement=True)
+            # gather means and sigmas
+            # torch.normal(mean, std)
+            x = torch.normal(mean=t_means[comps], std=t_sigmas[comps])
             return zscore(x)
-        return NumpySampler(_f, name=f"GaussianMixture")
+        return TorchSampler(_f, name=f"GaussianMixture")
 
     def Exponential(scale=1.0):
-        return NumpySampler(lambda n: zscore(np.random.exponential(scale, size=n)),
+        # torch Exponential uses rate = 1/scale
+        rate = 1.0 / scale
+        m = torch.distributions.Exponential(torch.tensor([rate]))
+        return TorchSampler(lambda n: zscore(m.sample((n,)).view(-1)),
                             name=f"Exponential")
 
     def Weibull(a=1.5, scale=1.0):
-        return NumpySampler(lambda n: zscore(scale * np.random.weibull(a, size=n)),
+        # torch Weibull(scale, concentration)
+        m = torch.distributions.Weibull(torch.tensor([scale]), torch.tensor([a]))
+        return TorchSampler(lambda n: zscore(m.sample((n,)).view(-1)),
                             name=f"Weibull")
 
     def Gamma(shape=2.0, scale=1.0):
-        return NumpySampler(lambda n: zscore(np.random.gamma(shape, scale, size=n)),
+        # torch Gamma(concentration, rate). rate = 1/scale.
+        rate = 1.0 / scale
+        m = torch.distributions.Gamma(torch.tensor([shape]), torch.tensor([rate]))
+        return TorchSampler(lambda n: zscore(m.sample((n,)).view(-1)),
                             name=f"Gamma")
 
     def Pareto(a=2.5, clip=10.0):
+        # Numpy pareto: x = (np.random.pareto(a, size=n)) which is Lomax(a).
+        # x = (1-u)^(-1/a) - 1
         def _f(n):
-            x = np.random.pareto(a, size=n)
-            x = np.clip(x, 0, clip)
+            u = torch.rand(n)
+            x = torch.pow(1 - u, -1.0 / a) - 1.0
+            x = torch.clamp(x, 0, clip)
             return zscore(x)
-        return NumpySampler(_f, name=f"Pareto")
+        return TorchSampler(_f, name=f"Pareto")
 
     def Cosine():
-        return NumpySampler(lambda n: np.cos(zscore(np.random.rand(n) * np.pi - np.pi/2)),
-                            name="Cosine")
+        def _f(n):
+             # Original: np.cos(zscore(np.random.rand(n) * np.pi - np.pi/2))
+             # Inner part: Uniform(-pi/2, pi/2). Then ZScore. Then Cos.
+             val = torch.rand(n) * np.pi - np.pi/2
+             return torch.cos(zscore(val))
+        return TorchSampler(_f, name="Cosine")
 
     def BimodalUniform(low1=-3, high1=-1, low2=1, high2=3, p=0.5):
         def _f(n):
-            mask = np.random.rand(n) < p
-            x = np.empty(n)
-            x[mask] = np.random.uniform(low1, high1, size=mask.sum())
-            x[~mask] = np.random.uniform(low2, high2, size=(~mask).sum())
+            mask = torch.rand(n) < p
+            x = torch.empty(n)
+            n_mask = mask.sum().item()
+            if n_mask > 0:
+                x[mask] = torch.rand(n_mask) * (high1 - low1) + low1
+            if n - n_mask > 0:
+                x[~mask] = torch.rand(n - n_mask) * (high2 - low2) + low2
             return zscore(x)
-        return NumpySampler(_f, name=f"BimodalUniform")
+        return TorchSampler(_f, name=f"BimodalUniform")
 
     def GaussianMixtureWideNarrow():
-        return GaussianMixture(means=(0, 0), sigmas=(0.3, 2.0), weights=(0.5, 0.5))
-
-
+        return GaussianMixture(means=(0.0, 0.0), sigmas=(0.3, 2.0), weights=(0.5, 0.5))
 
     # All sampler pairs
     list_distributions = [
         BetaLeft(),
         BetaRight(),
-        Laplace(),
-        UniformLowHigh(),
-        StudentT(df=5),
-        GaussianShifted(mu=1.0),
-        LogNormal(sigma=0.6),
-        CauchyTrunc(clip=5.0),
-        Triangular(-3, 0, 3),
-        Exponential(scale=1.0),
-        Weibull(a=2.0),
-        Gamma(2.0),
+        # Laplace(),
+        # UniformLowHigh(),
+        # StudentT(df=5),
+        # GaussianShifted(mu=1.0),
+        # LogNormal(sigma=0.6),
+        # CauchyTrunc(clip=5.0),
+        # Triangular(-3, 0, 3),
+        # Exponential(scale=1.0),
+        # Weibull(a=2.0),
+        # Gamma(2.0),
     ]
 
     # define all cross pairs
@@ -945,7 +983,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                     xt = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
 
                 # Define cost matrix
-                C = ot.dist(xs, xt, metric=metric)
+                C = ot.dist(xs, xt, metric=metric, use_tensor=True)
                 C /= C.max()
 
                 # Compute ground truth OT plan using POT
@@ -997,7 +1035,8 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 elif cost_type == 'variable':
                     encoder_input_c = torch.stack(encoder_input_c).to(device)
                 ####################################################################################################################################  OUR METHOD (TOT)
-                # Run model INFERENCE
+                # Run model INFERENCE                
+                start_time = time.time()
                 text_ids_pred = pytorch_model.generate(
                     encoder_input_ab = encoder_input_ab,
                     encoder_input_c  = encoder_input_c,
@@ -1006,19 +1045,24 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 )
                 text_pred = tokenizer.from_tokens(text_ids_pred)
                 print( "pair idx: ", idx)
-                print( "text_pred: ", text_pred)
+                logger.info(f"text_pred: \n{text_pred}")
                 text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred]
-                print( "text_pred_truncated: ", text_pred)
+                
+                # compute run time
+                run_time_tot = time.time() - start_time
+
+                logger.info(f"text_pred_truncated: \n{text_pred}")
                 text_pred_dense = [utils.parse_predicted_sparse_row_string(t, n_bins, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
-                #print( "text_pred_dense: ", text_pred_dense)
                 ot_pred_dense = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
                 ot_pred_dense_torch = torch.from_numpy(ot_pred_dense)
                 # build sparse matrix directly
                 ot_pred_sparse = sparse.coo_matrix(
                     ot_pred_dense, shape=otplan_solve_sparse.shape
                 )
-                print( "ot_pred_sparse: \n", ot_pred_sparse)
-                print( "ot_gt_sparse: \n", otplan_solve_sparse)
+                #print( "tot_pred_sparse: ")
+                #utils.print_sparse_matrix(ot_pred_sparse)
+                #print( "pot_gt_sparse: ")
+                #utils.print_sparse_matrix(otplan_solve_sparse)
 
                 # Compute metrics
                 # MAE
@@ -1043,16 +1087,25 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                     'mae_sparse':       mae_sparse_tot,
                     'mape_sparse':      mape_sparse_tot,
                     'hellinger_sparse': hellinger_sparse_tot,
-                    'tv_sparse':        tv_sparse_tot
+                    'tv_sparse':        tv_sparse_tot,
+                    'run_time':         run_time_tot
                 })
                 ####################################################################################################################################  NEURAL OT (NOT)
                 if cfg.inference.test_neural_ot:
+                    print("calling neural ot routine")
                     #_, ot_plan_not_dense = NOT_toy_1D_cost_weak.main_routine(X_sampler, Y_sampler, n_bins)
-                    _, ot_plan_not_dense = NOT_toy_1D_cost_strong.main_routine(X_sampler, Y_sampler, n_bins, rng)
+                    start_time = time.time()
+                    _, ot_plan_not_dense = NOT_toy_1D_cost_strong.main_routine(X_sampler, Y_sampler, n_bins, rng, metric)
                     ot_plan_not_sparse = sparse.coo_matrix(
                         ot_plan_not_dense,
                         shape=otplan_solve_sparse.shape
                     )
+                    run_time_not = time.time() - start_time
+                    #print("not_pred_sparse: ")
+                    #utils.print_sparse_matrix(ot_plan_not_sparse)
+                    print( "tot_not_pot_sparse: ")
+                    precision_to_display = cfg.tokenizer.DigitTokenizer.decimal_precision
+                    utils.print_sparse_matrices(ot_pred_sparse, ot_plan_not_sparse, otplan_solve_sparse, precision_to_display=precision_to_display)
                     # Compute metrics
                     # MAE
                     mae_sparse_not  = utils.sparse_mean_abs_error(otplan_solve_sparse, ot_plan_not_sparse)
@@ -1074,7 +1127,8 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                         'mae_sparse':       mae_sparse_not,
                         'mape_sparse':      mape_sparse_not,
                         'hellinger_sparse': hellinger_sparse_not,
-                        'tv_sparse':        tv_sparse_not
+                        'tv_sparse':        tv_sparse_not,
+                        'run_time':         run_time_not
                     })
                 ####################################################################################################################################  PLOTTING RESULTS of BOTH METHODS
 
@@ -1198,6 +1252,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         mape_sparse_matrix      = np.zeros((n_rows, n_cols))
         hellinger_sparse_matrix = np.zeros((n_rows, n_cols))
         tv_sparse_matrix        = np.zeros((n_rows, n_cols))
+        run_time_matrix         = np.zeros((n_rows, n_cols))
 
         # Fill matrices from all_results (results are stored in row-major order)
         for idx, r in enumerate(all_results_tot):
@@ -1208,18 +1263,17 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
             mape_sparse_matrix[i, j]       = r['mape_sparse']
             hellinger_sparse_matrix[i, j]  = r['hellinger_sparse']
             tv_sparse_matrix[i, j]         = r['tv_sparse']
+            run_time_matrix[i, j]          = r['run_time']
 
         # Create OT Cost Diff table
         logger.info("\n" + "="*80)
         logger.info("OT COST DIFF")
         logger.info("="*80)
-
         # Prepare table data with row names
         otcost_table_data = []
         for i, row_name in enumerate(row_names):
             row = [row_name] + [f"{otcost_diff_matrix[i, j]:.3e}" for j in range(n_cols)]
             otcost_table_data.append(row)
-
         otcost_headers = ['Source \\ Target'] + col_names
         otcost_table_str = tabulate(otcost_table_data, headers=otcost_headers, tablefmt='grid', floatfmt=".3e")
         logger.info("\n" + otcost_table_str)
@@ -1228,13 +1282,11 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         logger.info("\n" + "="*80)
         logger.info("MAE (SPARSE)")
         logger.info("="*80)
-        
         # Prepare table data with row names
         mae_sparse_table_data = [] 
         for i, row_name in enumerate(row_names):
             row = [row_name] + [f"{mae_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
             mae_sparse_table_data.append(row)
-        
         mae_sparse_headers = ['Source \\ Target'] + col_names
         mae_sparse_table_str = tabulate(mae_sparse_table_data, headers=mae_sparse_headers, tablefmt='grid', floatfmt=".3e")
         logger.info("\n" + mae_sparse_table_str)
@@ -1243,13 +1295,11 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         logger.info("\n" + "="*80)
         logger.info("MAPE (SPARSE)")
         logger.info("="*80)
-        
         # Prepare table data with row names
         mape_sparse_table_data = []    
         for i, row_name in enumerate(row_names):
             row = [row_name] + [f"{mape_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
             mape_sparse_table_data.append(row)
-        
         mape_sparse_headers = ['Source \\ Target'] + col_names
         mape_sparse_table_str = tabulate(mape_sparse_table_data, headers=mape_sparse_headers, tablefmt='grid', floatfmt=".3e")
         logger.info("\n" + mape_sparse_table_str)
@@ -1258,13 +1308,11 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         logger.info("\n" + "="*80)
         logger.info("HELLINGER (SPARSE)")
         logger.info("="*80)
-        
         # Prepare table data with row names
         hellinger_sparse_table_data = []
         for i, row_name in enumerate(row_names):
             row = [row_name] + [f"{hellinger_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
             hellinger_sparse_table_data.append(row)
-        
         hellinger_sparse_headers = ['Source \\ Target'] + col_names
         hellinger_sparse_table_str = tabulate(hellinger_sparse_table_data, headers=hellinger_sparse_headers, tablefmt='grid', floatfmt=".3e")
         logger.info("\n" + hellinger_sparse_table_str)
@@ -1273,16 +1321,27 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         logger.info("\n" + "="*80)
         logger.info("TV (SPARSE)")
         logger.info("="*80)
-        
         # Prepare table data with row names
         tv_sparse_table_data = []
         for i, row_name in enumerate(row_names):
             row = [row_name] + [f"{tv_sparse_matrix[i, j]:.3e}" for j in range(n_cols)]
             tv_sparse_table_data.append(row)
-        
         tv_sparse_headers = ['Source \\ Target'] + col_names
         tv_sparse_table_str = tabulate(tv_sparse_table_data, headers=tv_sparse_headers, tablefmt='grid', floatfmt=".3e")
         logger.info("\n" + tv_sparse_table_str)
+
+        # Create Run Time table
+        logger.info("\n" + "="*80)
+        logger.info("RUN TIME")
+        logger.info("="*80)
+        # Prepare table data with row names
+        run_time_table_data = []
+        for i, row_name in enumerate(row_names):
+            row = [row_name] + [f"{run_time_matrix[i, j]:.3e}" for j in range(n_cols)]
+            run_time_table_data.append(row)
+        run_time_headers = ['Source \\ Target'] + col_names
+        run_time_table_str = tabulate(run_time_table_data, headers=run_time_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + run_time_table_str)
 
         # Prepare summary table data
         table_data_tot = []
@@ -1294,10 +1353,11 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 f"{r['mae_sparse']:.3e}",
                 f"{r['mape_sparse']:.3e}",
                 f"{r['hellinger_sparse']:.3e}",
-                f"{r['tv_sparse']:.3e}"
+                f"{r['tv_sparse']:.3e}",    
+                f"{r['run_time']:.3e}",
             ])
 
-        headers = ['Source', 'Target', 'OT Cost Diff', 'MAE (sparse)', 'MAPE (sparse)', 'Hellinger (sparse)', 'TV (sparse)']
+        headers = ['Source', 'Target', 'OT Cost Diff', 'MAE (sparse)', 'MAPE (sparse)', 'Hellinger (sparse)', 'TV (sparse)', 'Run Time']
 
         # Print summary table to terminal
         logger.info("\n" + "="*80)
@@ -1317,10 +1377,11 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
             'MAE (Sparse)': ([r['mae_sparse'] for r in all_results_tot], [r['mae_sparse'] for r in all_results_not]),
             'MAPE (Sparse)': ([r['mape_sparse'] for r in all_results_tot], [r['mape_sparse'] for r in all_results_not]),
             'Hellinger (Sparse)': ([r['hellinger_sparse'] for r in all_results_tot], [r['hellinger_sparse'] for r in all_results_not]),
-            'TV (Sparse)': ([r['tv_sparse'] for r in all_results_tot], [r['tv_sparse'] for r in all_results_not])
+            'TV (Sparse)': ([r['tv_sparse'] for r in all_results_tot], [r['tv_sparse'] for r in all_results_not]),
+            'Run Time (Seconds)': ([r['run_time'] for r in all_results_tot], [r['run_time'] for r in all_results_not])
         }
-
-        fig_box, axes_box = plt.subplots(1, 5, figsize=(20, 5), dpi=120)
+        num_boxplots = len(metrics_to_plot)
+        fig_box, axes_box = plt.subplots(1, num_boxplots, figsize=(20, 5), dpi=120)
         fig_box.suptitle(f"Custom Distribution Pairs Summary - {metric}", fontsize=16, y=1.05)
         
         for idx, (m_name, (data_tot, data_not)) in enumerate(metrics_to_plot.items()):
@@ -1345,25 +1406,21 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 continue
 
             bplot = ax.boxplot(plot_data, vert=True, patch_artist=True, labels=labels,
-                               medianprops=dict(color="mistyrose"))
-            
+                               medianprops=dict(color="black"))
+
             # Color boxes
             for patch, color in zip(bplot['boxes'], colors):
                 patch.set_facecolor(color)
 
             ax.set_title(m_name, fontsize=12, fontweight='bold')
             ax.grid(True, linestyle='--', alpha=0.6)
-            
-            # Add basic stats text for TOT (optional, simplified)
-            if len(data_tot) > 0:
-                m_mean = np.mean(data_tot)
-                ax.text(0.95, 0.95, f"TOT Mean: {m_mean:.2e}", 
-                        transform=ax.transAxes, verticalalignment='top', horizontalalignment='right',
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, pad=0.3))
 
-            if len(data_not) > 0:
-                m_mean = np.mean(data_not)
-                ax.text(0.95, 0.95, f"NOT Mean: {m_mean:.2e}", 
+            # Add basic stats text for TOT and NOT
+            
+            m_mean_tot = np.mean(data_tot)
+            m_mean_not = np.mean(data_not)
+            stats_text = f"TOT Mean: {m_mean_tot:.2e}\nNOT Mean: {m_mean_not:.2e}"
+            ax.text(0.6, 0.95, stats_text, 
                         transform=ax.transAxes, verticalalignment='top', horizontalalignment='right',
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, pad=0.3))
         plt.tight_layout()
@@ -1403,9 +1460,12 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         cells.append(new_markdown_cell("### TV (Sparse)"))
         tv_sparse_table_str_notebook = tabulate(tv_sparse_table_data, headers=tv_sparse_headers, tablefmt='pipe', floatfmt=".3e")
         cells.append(new_markdown_cell(tv_sparse_table_str_notebook))
+        cells.append(new_markdown_cell("### Run Time"))
+        run_time_table_str_notebook = tabulate(run_time_table_data, headers=run_time_headers, tablefmt='pipe', floatfmt=".3e")
+        cells.append(new_markdown_cell(run_time_table_str_notebook))
 
         # Add Box Plot to notebook
-        cells.append(new_markdown_cell("## Results Distribution (Box Plots)"))
+        cells.append(new_markdown_cell("## Summary Box Plots"))
 
         # Convert box plot figure to base64
         buf = BytesIO()

@@ -10,7 +10,8 @@ import io
 #mydtype = torch.float32
 my_dtype_np    = np.float32
 my_dtype_torch = torch.float32
-metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'canberra']
+#metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'canberra']
+metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'chebyshev', 'canberra', 'minkowski']
 
 
 class RankFilter(logging.Filter):
@@ -482,7 +483,44 @@ def sparse_total_variation(P: sparse.coo_matrix, Q: sparse.coo_matrix) -> float:
     Q = Q.tocoo().copy()
 
     diff = (P - Q).tocoo()
-    return float(0.5 * np.abs(diff.data).sum(dtype=np.float64))    
+    return float(0.5 * np.abs(diff.data).sum(dtype=np.float64))
+
+def print_sparse_matrix(A):
+    A = A.tocoo()
+    for r, c, v in zip(A.row, A.col, A.data):
+        print(f"({r}, {c}), {v}")
+
+def print_sparse_matrices(A, B, C, precision_to_display=4):
+    # Convert to COO to easily extract (row, col) pairs
+    A_coo = A.tocoo()
+    B_coo = B.tocoo()
+    C_coo = C.tocoo()
+
+    # Collect set of all unique indices (r, c) present in any matrix
+    indices = set(zip(A_coo.row, A_coo.col))
+    indices.update(zip(B_coo.row, B_coo.col))
+    indices.update(zip(C_coo.row, C_coo.col))
+    
+    # Sort for deterministic output order
+    sorted_indices = sorted(list(indices))
+
+    # Convert to CSR for efficient point lookup
+    A_csr = A.tocsr()
+    B_csr = B.tocsr()
+    C_csr = C.tocsr()
+
+    rows = ["COORDS,\t\tTOT,\tNOT,\tPOT_GT"]
+    for r, c in sorted_indices:
+        v_A = A_csr[r, c]
+        v_B = B_csr[r, c]
+        v_C = C_csr[r, c]
+        #print(f"({r}, {c}),\t\t{v_A:.{precision_to_display}f},\t\t{v_B:.{precision_to_display}f},\t\t{v_C:.{precision_to_display}f}")
+        rows.append(f"({r:02d}, {c:02d}),\t{v_A:.{precision_to_display}f},\t{v_B:.{precision_to_display}f},\t{v_C:.{precision_to_display}f}")
+    
+    if rows:
+        logger = logging.getLogger(__name__)
+        logger.info("\n" + "\n".join(rows))
+
 
 def get_subfolder_name_from_cfg(cfg):
     return (

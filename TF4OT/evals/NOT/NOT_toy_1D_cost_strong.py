@@ -1,5 +1,6 @@
-import os, sys
-sys.path.append("..")
+import io
+from TF4OT import utils
+import logging
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -29,9 +30,42 @@ def weights_init_mlp(m):
     if classname.find('Linear') != -1:
         nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
 
-def main_routine(X_sampler, Y_sampler, num_bins, rng):
+def sqeuclidean_cost (X, Y):
+  return (X-Y).square().flatten(start_dim=1)
+  #return F.mse_loss(X, Y)
+
+def euclidean_cost (X, Y):
+  return torch.linalg.vector_norm(X-Y, dim=-1).flatten(start_dim=1)
+
+def cityblock_cost (X, Y):
+    #return (X - Y).abs().sum(dim=-1).flatten(start_dim=1)
+    return F.l1_loss(X, Y)
+
+def canberra_cost (X, Y):
+    eps = 1e-8  # tune if needed
+    num = (X - Y).abs()
+    den = X.abs() + Y.abs() + eps
+    canberra = (num / den).sum(dim=-1)      # sum over feature dim
+    return canberra
+
+def hamming_cost (X, Y):
+    return (X != Y).float().sum(dim=-1)
+
+def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
     
-#    DEVICE_IDS = [6]
+    #DEVICE_IDS = [2,1,0]
+    if metric == "sqeuclidean":
+        COST = sqeuclidean_cost
+    elif metric == "euclidean":
+        COST = euclidean_cost
+    elif metric == "cityblock":
+        COST = cityblock_cost
+    elif metric == "canberra":
+        COST = canberra_cost
+    elif metric == "hamming":
+        COST = hamming_cost
+    else:
+        raise ValueError("Unknown metric: {}".format(metric))
 
     T_ITERS = 10
     f_LR, T_LR = 1e-4, 1e-4
@@ -43,7 +77,7 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng):
     Z_SIZE = 4
 
     #MAX_STEPS = 5001
-    MAX_STEPS = 501
+    MAX_STEPS = 51
     PLOT_INTERVAL = MAX_STEPS-1
     SEED = 0x000000
 
@@ -82,17 +116,18 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng):
     
     T.apply(weights_init_mlp); f.apply(weights_init_mlp)
     
-#    if len(DEVICE_IDS) > 1:
-#        T = nn.DataParallel(T, device_ids=DEVICE_IDS)
-#        f = nn.DataParallel(f, device_ids=DEVICE_IDS)
+    # if len(DEVICE_IDS) > 1:
+    #     T = nn.DataParallel(T, device_ids=DEVICE_IDS)
+    #     f = nn.DataParallel(f, device_ids=DEVICE_IDS)
     
-    print('T params:', np.sum([np.prod(p.shape) for p in T.parameters()]))
-    print('f params:', np.sum([np.prod(p.shape) for p in f.parameters()]))
+    #print('T params:', np.sum([np.prod(p.shape) for p in T.parameters()]))
+    #print('f params:', np.sum([np.prod(p.shape) for p in f.parameters()]))
     
     T_opt = torch.optim.Adam(T.parameters(), lr=T_LR, weight_decay=1e-10)
     f_opt = torch.optim.Adam(f.parameters(), lr=f_LR, weight_decay=1e-10)
     
-    for step in tqdm(range(MAX_STEPS)):
+    logger = logging.getLogger(__name__)
+    for step in tqdm(range(MAX_STEPS), mininterval=3600.0, file=utils.TqdmToLogger(logger)):
         # T optimization
         unfreeze(T); freeze(f)
         for t_iter in range(T_ITERS):
@@ -104,10 +139,15 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng):
             T_XZ = T(
                 XZ.flatten(start_dim=0, end_dim=1)
             ).permute(1, 0).reshape(DIM, -1, Z_SIZE).permute(1, 2, 0)
-            
-            T_loss = F.mse_loss(X, T_XZ).mean() - f(T_XZ.flatten(start_dim=0, end_dim=1)).mean()
+            # STRONG COST:
+            #T_loss = F.mse_loss(X, T_XZ).mean() - f(T_XZ.flatten(start_dim=0, end_dim=1)).mean()
+            T_loss = COST(X, T_XZ).mean() - f(T_XZ.flatten(start_dim=0, end_dim=1)).mean()
+
+            # WEAK COST:
+            #T_loss = F.mse_loss(X, T_XZ).mean() - T_XZ.var(dim=1).mean() -\
+            #f(T_XZ.flatten(start_dim=0, end_dim=1)).mean() 
             T_loss.backward(); T_opt.step()
-        
+
         del T_loss, T_XZ, X, Z
         gc.collect(); torch.cuda.empty_cache()
 
@@ -139,7 +179,7 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng):
 
         # gc.collect()
         # torch.cuda.empty_cache()
-    print("returning results")
+    print("neural ot run completed")
     ot_plan_T, ot_plan_hist = plot_1D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1_000_000, num_bins=num_bins, rng=rng)
 
     #print("Plotting solutions on DOT (non-unique!)")

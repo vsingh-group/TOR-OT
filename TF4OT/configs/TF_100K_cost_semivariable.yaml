@@ -55,7 +55,7 @@ tokenizer:
 
 inference:
   max_seq_len:  64
-  out_dir:      "./experiments/cost_fixed"
+  out_dir:      "./experiments/cost_semivariable"
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}

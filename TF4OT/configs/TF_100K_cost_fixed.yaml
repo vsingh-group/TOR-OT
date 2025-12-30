@@ -66,6 +66,6 @@ inference:
   use_amp:      ${training.use_amp}
   batch_size:   1
   testset_size: 1_000
-  test_over_testset:      false       # Set to true to test all testset examples
+  test_over_testset:      true       # Set to true to test all testset examples
   test_over_custom_pairs: true       # Set to true to run distribution pair tests
   test_neural_ot:         true       # Set to true to run neural OT tests
