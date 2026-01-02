@@ -8,7 +8,7 @@ import torch.nn as nn
 import gc
 
 import torch.nn.functional as F
-from IPython.display import clear_output
+#from IPython.display import clear_output
 
 from TF4OT.evals.NOT.src.tools import unfreeze, freeze
 from TF4OT.evals.NOT.src import distributions

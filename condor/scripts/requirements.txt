@@ -48,3 +48,4 @@ ipywidgets==8.1.8
 widgetsnbextension==4.0.15
 seaborn==0.12.2
 matplotlib==3.7.3
+ipython==9.6.0
