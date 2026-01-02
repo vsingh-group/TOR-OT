@@ -12,10 +12,9 @@ defaults:
 
 # Override specific parameters
 data:
-  #sqeuclidean
   #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_cityblock_bins30"
-  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
-  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_canberra_bins30"
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
+  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_canberra_bins30"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
@@ -24,7 +23,7 @@ data:
     support_size:          30
     input_total_dim:       61      # row-wise -> 2*support_size+1
     input_cost_type:       "fixed" # fixed, variable, semivariable
-    input_cost_metric:     "sqeuclidean" # only for "fixed" and "variable" costs
+    input_cost_metric:     "canberra" # only for "fixed" and "variable" costs
     input_cost_matrix_dim: 0       # support_size*support_size
     row_wise:              true
   loading:

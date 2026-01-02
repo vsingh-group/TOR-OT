@@ -13,17 +13,22 @@ defaults:
 # Override specific parameters
 data:
   #hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_all8_bin30"
+  
   #metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'canberra']
-  hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_all5_bin30"
+  #hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_all5_bin30"
+
+  #metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'chebyshev', 'canberra', 'minkowski']
+  hf_dataset:     "ivanjaenm/otdata_600K_rowwise_costtype_all6_bin30"
+
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
-    size_n:                500_000
-    size_s:                '500K'
+    size_n:                600_000
+    size_s:                '600K'
     support_size:          30
     input_total_dim:       61             # row-wise -> 2*support_size+1 
     input_cost_type:       "semivariable" # fixed, variable, semivariable
-    input_cost_matrix_dim: 5              # variable: support_size*support_size or semivariable: number of metrics used
+    input_cost_matrix_dim: 6              # variable: support_size*support_size or semivariable: number of metrics used
     row_wise:              true
   loading:
     num_workers:           20

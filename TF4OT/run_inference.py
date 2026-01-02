@@ -305,9 +305,16 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
 
                     plt.tight_layout()
 
-                    # Store figure for notebook
+                    # Store figure for notebook as base64 string
+                    buf = BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', dpi=120)
+                    buf.seek(0)
+                    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+                    buf.close()
+                    plt.close(fig) # Close figure immediately to free memory
+
                     all_figures.append({
-                        'fig': fig,
+                        'img_base64': img_base64,
                         'batch_idx': k
                     })
 
@@ -586,21 +593,12 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
         # Add markdown header for this batch
         cells.append(new_markdown_cell(f"### Batch {fig_data['batch_idx']}"))
         
-        # Convert figure to base64 for embedding
-        buf = BytesIO()
-        fig_data['fig'].savefig(buf, format='png', bbox_inches='tight', dpi=120)
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        buf.close()
-        
-        plt.close(fig_data['fig'])
-        
         # Create an empty code cell with the figure as output (no code visible)
         cell = new_code_cell("")
         cell.outputs = [
             nbformat.v4.new_output(
                 output_type='display_data',
-                data={'image/png': img_base64},
+                data={'image/png': fig_data['img_base64']},
                 metadata={}
             )
         ]
@@ -906,7 +904,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
     list_distributions = [
         BetaLeft(),
         BetaRight(),
-        # Laplace(),
+        Laplace(),
         # UniformLowHigh(),
         # StudentT(df=5),
         # GaussianShifted(mu=1.0),
@@ -1230,9 +1228,16 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
 
                 plt.tight_layout()
 
-                # Store figure for notebook
+                # Store figure for notebook as base64 string
+                buf = BytesIO()
+                fig.savefig(buf, format='png', bbox_inches='tight', dpi=120)
+                buf.seek(0)
+                img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+                buf.close()
+                plt.close(fig) # Close figure immediately to free memory
+
                 all_figures.append({
-                    'fig': fig,
+                    'img_base64': img_base64,
                     'source': X_sampler.name,
                     'target': Y_sampler.name,
                     'idx': idx
@@ -1494,21 +1499,12 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
             # Add markdown header for this pair
             cells.append(new_markdown_cell(f"### {fig_data['idx']}: {fig_data['source']} → {fig_data['target']}"))
 
-            # Convert figure to base64 for embedding
-            buf = BytesIO()
-            fig_data['fig'].savefig(buf, format='png', bbox_inches='tight', dpi=120)
-            buf.seek(0)
-            img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-            buf.close()
-
-            plt.close(fig_data['fig'])
-
             # Create an empty code cell with the figure as output (no code visible)
             cell = new_code_cell("")
             cell.outputs = [
                 nbformat.v4.new_output(
                     output_type='display_data',
-                    data={'image/png': img_base64},
+                    data={'image/png': fig_data['img_base64']},
                     metadata={}
                 )
             ]

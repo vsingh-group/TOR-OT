@@ -1,7 +1,3 @@
-import io
-from TF4OT import utils
-import logging
-
 import matplotlib
 import matplotlib.pyplot as plt
 # %matplotlib inline
@@ -49,6 +45,7 @@ def canberra_cost (X, Y):
     return canberra
 
 def hamming_cost (X, Y):
+    C = ot.dist(X, Y, metric="hamming", use_tensor=True)
     return (X != Y).float().sum(dim=-1)
 
 def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
@@ -77,7 +74,7 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
     Z_SIZE = 4
 
     #MAX_STEPS = 5001
-    MAX_STEPS = 51
+    MAX_STEPS = 2501
     PLOT_INTERVAL = MAX_STEPS-1
     SEED = 0x000000
 
@@ -126,8 +123,7 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
     T_opt = torch.optim.Adam(T.parameters(), lr=T_LR, weight_decay=1e-10)
     f_opt = torch.optim.Adam(f.parameters(), lr=f_LR, weight_decay=1e-10)
     
-    logger = logging.getLogger(__name__)
-    for step in tqdm(range(MAX_STEPS), mininterval=3600.0, file=utils.TqdmToLogger(logger)):
+    for step in tqdm(range(MAX_STEPS)):
         # T optimization
         unfreeze(T); freeze(f)
         for t_iter in range(T_ITERS):
