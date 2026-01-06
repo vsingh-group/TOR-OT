@@ -83,13 +83,12 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
 
     # Define support points
     possible_metrics = utils.metrics
-    metric_one_hot = None
+    metric_one_hot  = [1.0 if m == metric else 0.0 for m in possible_metrics]
 
     # Fixed cost matrix case - same C for all samples
     if cost_type == 'fixed':
         xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
         xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
-        metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
         # Define cost matrix    
         C = ot.dist(xs, xt, metric=metric, use_tensor=True, p=3)
         C /= C.max()
