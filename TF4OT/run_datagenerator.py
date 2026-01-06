@@ -58,7 +58,7 @@ def coo_tolist(A: sp.coo_matrix, j: int) -> list:
 
     return sparse_rep
 
-def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', cost_type='fixed', row_wise=True, device: str = 'cpu'):
+def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', cost_type='fixed', row_wise=True, device: str = 'cpu', dim: int = 1):
     """
     Generator function that yields individual samples for the optimal transport dataset.
 
@@ -87,8 +87,26 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
 
     # Fixed cost matrix case - same C for all samples
     if cost_type == 'fixed':
-        xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
-        xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
+        if dim == 1:
+            xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
+            xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
+        elif dim == 2:
+            # Create a 2D grid
+            s = int(np.sqrt(n_bins))
+            if s*s != n_bins:
+                 # If not perfect square, just warn?
+                 print(f"Warning: n_bins {n_bins} is not a perfect square. Using {s}x{s}={s*s} grid points for Cost Matrix construction.")
+            
+            x = np.arange(s, dtype=my_dtype_np)
+            y = np.arange(s, dtype=my_dtype_np)
+            xv, yv = np.meshgrid(x, y)
+            grid = np.stack((xv.flatten(), yv.flatten()), axis=1) # (s*s, 2)
+            
+            # If n_bins != s*s, this will fail or be wrong size. 
+            # We assume for fixed regular 2D grid n_bins is square.
+            xs = grid
+            xt = grid
+
         # Define cost matrix    
         C = ot.dist(xs, xt, metric=metric, use_tensor=True, p=3)
         C /= C.max()
@@ -100,15 +118,25 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             # n_bins defined elsewhere
             x_low = 0; x_high = n_bins
             # integers from [x_low, x_high) -> 0 to 9
-            xs = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
-            xt = np.random.randint(low=x_low, high=x_high, size=(n_bins, 2))
+            xs = np.random.randint(low=x_low, high=x_high, size=(n_bins, dim))
+            xt = np.random.randint(low=x_low, high=x_high, size=(n_bins, dim))
             C = ot.dist(xs, xt, metric=metric, use_tensor=True, p=3)
             C = C / C.max() # avoid casting errors later
         elif cost_type == 'semivariable':
-            xs = np.zeros((n_bins, 2))
-            xt = np.zeros((n_bins, 2))
-            xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
-            xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
+            xs = np.zeros((n_bins, dim))
+            xt = np.zeros((n_bins, dim))
+            
+            if dim == 1:
+                xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
+                xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
+            elif dim == 2:
+                 s = int(np.sqrt(n_bins))
+                 x = np.arange(s, dtype=my_dtype_np)
+                 y = np.arange(s, dtype=my_dtype_np)
+                 xv, yv = np.meshgrid(x, y)
+                 grid = np.stack((xv.flatten(), yv.flatten()), axis=1)
+                 xs = grid
+                 xt = grid
             # pick a random metric
             metric = np.random.choice(possible_metrics)
             # one-hot encode the chosen metric
@@ -116,23 +144,24 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             metric_one_hot = [1.0 if m == metric else 0.0 for m in possible_metrics]
             C = ot.dist(xs, xt, metric=metric, use_tensor=True, p=3)
             C /= C.max()
+
+        # Compute ground truth OT plan using POT
+        otplan_solve = ot.solve(
+            C, a=source_dist[i], b=target_dist[i]
+        )
         # Sparse plan
         # otplan_emd_sparse = ot.emd_1d(
         #     xs, xt,
         #     source_dist[i], target_dist[i], dense=False
         # )
-        otplan_solve_sparse = ot.solve(
-            C, a=source_dist[i], b=target_dist[i]
-        ).sparse_plan
+        otplan_solve_sparse = otplan_solve.sparse_plan
 
         # Dense plan
         # otplan_emd_dense = ot.emd_1d(
         #     xs, xt,
         #     source_dist[i], target_dist[i], dense=True
         # )
-        otplan_solve_dense = ot.solve(
-            C, a=source_dist[i], b=target_dist[i]
-        ).plan
+        otplan_solve_dense = otplan_solve.plan
 
         # Convert source/target distributions to tensors
         source_tensor = torch.tensor(source_dist[i], dtype=my_dtype_torch)
@@ -358,6 +387,7 @@ def main():
     parser.add_argument("--n_bins", type=int, default=10, help="Number of bins for discretization")
     parser.add_argument("--dataset_size", type=int, default=1_000_000, help="Number of samples to generate")
     parser.add_argument("--row_wise", action="store_true", help="Store output plan matrix row by row?")
+    parser.add_argument("--dim", type=int, default=1, help="Dimension of the distribution (1 or 2)")
     parser.add_argument("--output_dir", type=str, default="./ot_dataset", help="Output directory for dataset")
     parser.add_argument("--metric", type=str, default="sqeuclidean", help="Distance metric")
     parser.add_argument("--cost_fixed", action="store_true", help="Is the cost matrix C, fixed?")
@@ -393,7 +423,7 @@ def main():
         raise ValueError("Invalid cost type")
     print(f"Cost type: {cost_type}")
     dataset = Dataset.from_generator(
-        lambda: ot_sample_generator(args.n_bins, args.dataset_size, args.metric, cost_type, args.row_wise, args.device)
+        lambda: ot_sample_generator(args.n_bins, args.dataset_size, args.metric, cost_type, args.row_wise, args.device, args.dim)
     )
 
     # Split into train/test
