@@ -91,21 +91,29 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
             xs = np.arange(n_bins, dtype=my_dtype_np)[:, None]
             xt = np.arange(n_bins, dtype=my_dtype_np)[:, None]
         elif dim == 2:
-            # Create a 2D grid
+            # Replicate logic from run_inference_2d.py L1725-L1751 for consistency
+            rng = [[-2.5, 2.5], [-2.5, 2.5]]
             s = int(np.sqrt(n_bins))
             if s*s != n_bins:
-                 # If not perfect square, just warn?
-                 print(f"Warning: n_bins {n_bins} is not a perfect square. Using {s}x{s}={s*s} grid points for Cost Matrix construction.")
+                print(f"Warning: n_bins {n_bins} is not a perfect square and not 30. Using {s}x{s}={s*s} grid points.")
+            nx, ny = s, s
             
-            x = np.arange(s, dtype=my_dtype_np)
-            y = np.arange(s, dtype=my_dtype_np)
-            xv, yv = np.meshgrid(x, y)
-            grid = np.stack((xv.flatten(), yv.flatten()), axis=1) # (s*s, 2)
+            dx = (rng[0][1] - rng[0][0]) / nx
+            dy = (rng[1][1] - rng[1][0]) / ny
+            xc = np.linspace(rng[0][0] + dx/2, rng[0][1] - dx/2, nx)
+            yc = np.linspace(rng[1][0] + dy/2, rng[1][1] - dy/2, ny)
             
-            # If n_bins != s*s, this will fail or be wrong size. 
-            # We assume for fixed regular 2D grid n_bins is square.
-            xs = grid
-            xt = grid
+            # Grid points matching flatten order (indexing='ij')
+            XX, YY = np.meshgrid(xc, yc, indexing='ij') 
+            grid_points = np.stack([XX.flatten(), YY.flatten()], axis=1) # (n_bins, 2)
+            
+            # If n_bins != nx*ny (e.g. if we used s*s but n_bins was something else), resize?
+            # Ideally we fail or warn. For now assuming consistent usage.
+            if n_bins != nx * ny:
+                print(f"Warning: n_bins {n_bins} != {nx}*{ny}. Grid size mismatch.")
+                
+            xs = grid_points
+            xt = grid_points
 
         # Define cost matrix    
         C = ot.dist(xs, xt, metric=metric, use_tensor=True, p=3)
