@@ -226,7 +226,7 @@ def training_routine(rank, cfg):
 
     # Main training loop
     OT_INPUT_TOTAL        = "input_total"
-    OT_INPUT_COST         = "input_cost"
+    OT_INPUT_COST_TYPE    = "input_cost_type"
     OT_INPUT_COST_MATRIX  = "input_cost_matrix"
     OT_TARGET_PLAN_MATRIX = "target_otplan_solve_sparse"
 
@@ -257,7 +257,7 @@ def training_routine(rank, cfg):
                 encoder_input_c      = batch[OT_INPUT_COST_MATRIX]                      # [B, n_bins, n_bins]
                 encoder_input_c_flat = encoder_input_c.flatten(start_dim=1).to(device)  # [B, n_bins*n_bins]
             elif input_cost_type == 'semivariable':
-                encoder_input_c_flat = batch[OT_INPUT_COST]
+                encoder_input_c_flat = batch[OT_INPUT_COST_TYPE]
             elif input_cost_type == 'fixed':
                 encoder_input_c_flat = None
 

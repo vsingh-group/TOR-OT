@@ -36,13 +36,10 @@ from hydra.utils import instantiate
 # Setup logging
 logger = logging.getLogger(__name__)
 
-OT_SOURCE_DIST         = "source_dist"
-OT_TARGET_DIST         = "target_dist"
 OT_INPUT_TOTAL         = "input_total"
-OT_INPUT_COST_ONEHOT   = "input_cost"
+OT_INPUT_COST_ONEHOT   = "input_cost_type"
 OT_INPUT_COST_MATRIX   = "input_cost_matrix"
 OT_TARGET_PLAN_MATRIX_SPARSE  = "target_otplan_solve_sparse"
-OT_TARGET_PLAN_MATRIX_DENSE   = "target_otplan_solve_dense"
 
 def inference_routine(cfg):
     """
@@ -109,7 +106,7 @@ def inference_routine(cfg):
     # Run distribution pair tests if enabled
     if hasattr(cfg.inference, 'test_over_custom_pairs') and cfg.inference.test_over_custom_pairs:
         logger.info(f"{'='*80}")
-        logger.info("Starting distribution pairs evaluation...")
+        logger.info("Starting 1d distribution pairs evaluation...")
         logger.info(f"{'='*80}\n")
         eval_all_1d_distribution_pairs(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path)
 
@@ -187,8 +184,25 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                 ot_pred_dense   = ot_pred_dense_batch[start:end].detach()
                 ot_pred_sparse  = sparse.coo_matrix(ot_pred_dense.cpu().numpy())
 
-                ot_target_dense  = batch[OT_TARGET_PLAN_MATRIX_DENSE][start:end]
-                ot_target_sparse = sparse.coo_matrix(ot_target_dense.cpu().numpy())
+                ot_target_sparse_rows = batch[OT_TARGET_PLAN_MATRIX_SPARSE][start:end]
+                # Reconstruct sparse matrix from rows
+                # Each row i (0 to n_bins-1) is a list [c, v, c, v, ...]
+                gt_rows = []
+                gt_cols = []
+                gt_data = []
+                for i, row_data in enumerate(ot_target_sparse_rows):
+                    if isinstance(row_data, torch.Tensor):
+                        row_data = row_data.tolist()
+                    # row_data is [col, val, col, val, ...]
+                    for idx in range(0, len(row_data), 2):
+                         c = int(row_data[idx])
+                         v = float(row_data[idx+1])
+                         gt_rows.append(i)
+                         gt_cols.append(c)
+                         gt_data.append(v)
+                
+                ot_target_sparse = sparse.coo_matrix((gt_data, (gt_rows, gt_cols)), shape=(n_bins, n_bins))
+                ot_target_dense  = ot_target_sparse.toarray() # Needed for plotting and some metrics if not sparse-optimized
 
                 # Calculate MAE
                 mae_sparse  = utils.sparse_mean_abs_error(ot_target_sparse, ot_pred_sparse)
@@ -201,9 +215,9 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                 tv_sparse = utils.sparse_total_variation(ot_target_sparse, ot_pred_sparse)
                 # Calculate OT cost diff
                 C = batch[OT_INPUT_COST_MATRIX][k]
-                otcost_gt     = (ot_target_dense * C).sum()
-                otcost_pred   = (ot_pred_dense   * C).sum()
-                otcost_diff   = abs(otcost_pred - otcost_gt).item()
+                otcost_gt     = (ot_target_dense * C).sum().item() # Ensure scalar
+                otcost_pred   = (ot_pred_dense   * C).sum().item()
+                otcost_diff   = abs(otcost_pred - otcost_gt)
 
                 # Collect metrics
                 all_mae_sparse.append(mae_sparse)
@@ -226,8 +240,11 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                 if fig_counter < fig_counter_max:
                     fig_counter += 1
                     # Create visualization for first sample in batch
-                    source = batch[OT_SOURCE_DIST][k].cpu().numpy()
-                    target = batch[OT_TARGET_DIST][k].cpu().numpy()
+                    # Extract source and target from OT_INPUT_TOTAL
+                    # OT_INPUT_TOTAL structure: [source (n_bins), target (n_bins), input_idx (1)]
+                    input_total_vec = batch[OT_INPUT_TOTAL][k]
+                    source = input_total_vec[:n_bins].cpu().numpy()
+                    target = input_total_vec[n_bins:2*n_bins].cpu().numpy()
                     input_cost_onehot = batch[OT_INPUT_COST_ONEHOT][k].cpu().numpy()
 
                     fig, axarr = plt.subplots(1, 5, figsize=(18, 3.5), dpi=120)
@@ -982,7 +999,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
 
                 # Define cost matrix
                 C = ot.dist(xs, xt, metric=metric, use_tensor=True)
-                C /= C.max()
+                C = C / C.max()
 
                 # Compute ground truth OT plan using POT
                 otplan_solve = ot.solve(
@@ -1089,6 +1106,8 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                     'run_time':         run_time_tot
                 })
                 ####################################################################################################################################  NEURAL OT (NOT)
+                ot_plan_not_dense = None
+                ot_plan_not_sparse = None
                 if cfg.inference.test_neural_ot:
                     print("calling neural ot routine")
                     #_, ot_plan_not_dense = NOT_toy_1D_cost_weak.main_routine(X_sampler, Y_sampler, n_bins)
@@ -1197,13 +1216,19 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
 
                 # --- NOT Model Prediction ---
-                im5 = axarr[5].imshow(ot_plan_not_dense, cmap='Purples', vmin=vmin, vmax=vmax, origin='lower', aspect="auto")
+                if ot_plan_not_dense is not None:
+                    im5 = axarr[5].imshow(ot_plan_not_dense, cmap='Purples', vmin=vmin, vmax=vmax, origin='lower', aspect="auto")
+                    axarr[5].set_title(r"$\hat{\pi}$ Neural OT", fontsize=12)
+                    axarr[5].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_plan_not_sparse.sum():.5f}$',
+                                transform=axarr[5].transAxes, fontsize=10,
+                                verticalalignment='top', bbox=dict(boxstyle='round',
+                                facecolor='white', alpha=0.8))
+                else:
+                    im5 = axarr[5].imshow(np.zeros_like(otplan_solve_dense), cmap='Purples', vmin=vmin, vmax=vmax, origin='lower', aspect="auto")
+                    axarr[5].set_title(r"$\hat{\pi}$ Neural OT (N/A)", fontsize=12)
+                    
                 axarr[5].set_xlabel("Target bins")
                 axarr[5].set_ylabel("Source bins")
-                axarr[5].text(0.02, 0.98, rf'$\sum \hat{{\pi}} = {ot_plan_not_sparse.sum():.5f}$',
-                            transform=axarr[5].transAxes, fontsize=10,
-                            verticalalignment='top', bbox=dict(boxstyle='round',
-                            facecolor='white', alpha=0.8))
                 plt.colorbar(im5, ax=axarr[5], fraction=0.046, pad=0.04)
 
                 # --- Model Prediction on Dataset (samples + plan on axarr[5]) ---
@@ -1422,9 +1447,9 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
 
             # Add basic stats text for TOT and NOT
             
-            m_mean_tot = np.mean(data_tot)
-            m_mean_not = np.mean(data_not)
-            stats_text = f"TOT Mean: {m_mean_tot:.2e}\nNOT Mean: {m_mean_not:.2e}"
+            m_median_tot = np.median(data_tot)
+            m_median_not = np.median(data_not)
+            stats_text = f"TOT Median: {m_median_tot:.2e}\nNOT Median: {m_median_not:.2e}"
             ax.text(0.6, 0.95, stats_text, 
                         transform=ax.transAxes, verticalalignment='top', horizontalalignment='right',
                         bbox=dict(boxstyle='round', facecolor='white', alpha=0.8, pad=0.3))
