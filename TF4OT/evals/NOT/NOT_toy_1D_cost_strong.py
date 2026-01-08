@@ -175,7 +175,7 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
 
         # gc.collect()
         # torch.cuda.empty_cache()
-    print("neural ot run completed")
+    print("1d neural ot run completed")
     ot_plan_T, ot_plan_hist = plot_1D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1_000_000, num_bins=num_bins, rng=rng)
 
     #print("Plotting solutions on DOT (non-unique!)")

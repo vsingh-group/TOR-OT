@@ -1543,7 +1543,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         # Save notebook
         os.makedirs(cfg.inference.out_dir, exist_ok=True)
         #save_dir = os.path.join(cfg.inference.out_dir, model_base_path)
-        notebook_path = os.path.join(model_base_path, f'eval_all_pairs_{metric}.ipynb')
+        notebook_path = os.path.join(model_base_path, f'eval_all_pairs_1d_{metric}.ipynb')
 
         with open(notebook_path, 'w') as f:
             nbformat.write(nb, f)

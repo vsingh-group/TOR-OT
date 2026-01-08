@@ -160,11 +160,11 @@ def plot_bar_and_stochastic_2D(X_sampler, Y_sampler, T, ZD, Z_STD, plot_discrete
     fig.tight_layout()
     return fig, axes
 
-def plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD):
+def plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1024, num_bins=(5,6), rng=None):
     DIM = 2
     freeze(T)
 
-    PLOT_SIZE = 512
+    PLOT_SIZE = num_samples
     X = X_sampler.sample(PLOT_SIZE).reshape(-1, 1, DIM).repeat(1, 1, 1)
     Y = Y_sampler.sample(PLOT_SIZE)
 
@@ -175,32 +175,68 @@ def plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD):
             XZ.flatten(start_dim=0, end_dim=1)
         ).permute(1, 0).reshape(DIM, -1, 1).permute(1, 2, 0)
 
-    fig, axes = plt.subplots(1, 3, figsize=(15, 5.4), sharex=True, sharey=True, dpi=150)
+    #fig, axes = plt.subplots(1, 4, figsize=(20, 5.4), dpi=150)
 
     X_np = X[:,0].cpu().numpy()
     Y_np = Y.cpu().numpy()
     T_XZ_np = T_XZ[:,0].cpu().numpy()
 
-    for i in range(3):
-        axes[i].set_xlim(-2.5, 2.5); axes[i].set_ylim(-2.5, 2.5)
-        axes[i].grid(True)
+    # for i in range(3):
+    #     axes[i].set_xlim(-2.5, 2.5); axes[i].set_ylim(-2.5, 2.5)
+    #     axes[i].grid(True)
+    # rng = [(-2.5, 2.5), (-2.5, 2.5)]
+    # #axes[0].scatter(X_np[:, 0], X_np[:, 1], c='darkseagreen', edgecolors='black')
+    # axes[0].hist2d(X_np[:, 0], X_np[:, 1], bins=[num_bins[0], num_bins[1]], cmap='viridis', range=rng)
+    # axes[1].hist2d(Y_np[:, 0], Y_np[:, 1], bins=[num_bins[0], num_bins[1]], cmap='viridis', range=rng)
+    # axes[2].hist2d(T_XZ_np[:, 0], T_XZ_np[:, 1], bins=[num_bins[0], num_bins[1]], cmap='viridis', range=rng)
+    
+    # Compute Transport Plan Matrix (Source Bins vs Target Bins)
+    nx, ny = num_bins
+    x_edges = np.linspace(-2.5, 2.5, nx + 1)
+    y_edges = np.linspace(-2.5, 2.5, ny + 1)
+    
+    # Bin indices for Source (X_np)
+    sx = np.digitize(X_np[:, 0], x_edges) - 1
+    sy = np.digitize(X_np[:, 1], y_edges) - 1
+    sx = np.clip(sx, 0, nx - 1)
+    sy = np.clip(sy, 0, ny - 1)
+    s_flat = sx * ny + sy
+    
+    # Bin indices for Target (T_XZ_np)
+    tx = np.digitize(T_XZ_np[:, 0], x_edges) - 1
+    ty = np.digitize(T_XZ_np[:, 1], y_edges) - 1
+    tx = np.clip(tx, 0, nx - 1)
+    ty = np.clip(ty, 0, ny - 1)
+    t_flat = tx * ny + ty
+    
+    # 2D Histogram of couplings
+    try:
+        plan_matrix, _, _ = np.histogram2d(s_flat, t_flat, bins=np.arange(nx * ny + 1))
+        plan_matrix /= plan_matrix.sum()
+    except Exception as e:
+        print(f"Error computing plan matrix: {e}")
+        plan_matrix = np.zeros((nx*ny, nx*ny))
+    
+    # axes[0].set_title(r'Input $x\sim\mathbb{P}$', fontsize=22, pad=10)
+    # axes[1].set_title(r'Target $y\sim\mathbb{Q}$', fontsize=22, pad=10)
+    # axes[2].set_title(r'Fitted $T(x,z)_{\#}(\mathbb{P}\times\mathbb{S})$', fontsize=22, pad=10)
+    
+    # # Plot Plan Matrix
+    # im3 = axes[3].imshow(plan_matrix, cmap='Blues', aspect='auto', origin='lower')
+    # axes[3].set_title(r'Transport Plan $\hat{\pi}$', fontsize=22, pad=10)
+    # axes[3].set_xlabel('Target bins', fontsize=16)
+    # axes[3].set_ylabel('Source bins', fontsize=16)
+    # plt.colorbar(im3, ax=axes[3], fraction=0.046, pad=0.04)
 
-    axes[0].scatter(X_np[:, 0], X_np[:, 1], c='darkseagreen', edgecolors='black')
-    axes[1].scatter(Y_np[:, 0], Y_np[:, 1], c='peru', edgecolors='black')
-    axes[2].scatter(T_XZ_np[:, 0], T_XZ_np[:, 1], c='wheat', edgecolors='black')
-
-    axes[0].set_title(r'Input $x\sim\mathbb{P}$', fontsize=22, pad=10)
-    axes[1].set_title(r'Target $y\sim\mathbb{Q}$', fontsize=22, pad=10)
-    axes[2].set_title(r'Fitted $T(x,z)_{\#}(\mathbb{P}\times\mathbb{S})$', fontsize=22, pad=10)
-
-    fig.tight_layout()
-    return fig, axes
+    # fig.tight_layout()
+    #return fig, axes, plan_matrix
+    return plan_matrix
 
 def plot_1D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1024, num_bins=30, rng=None):
     DIM = 1; freeze(T)
     
-    X, Y = X_sampler.sample(num_samples), Y_sampler.sample(num_samples)
-    X_np, Y_np = X.cpu().numpy(), Y.cpu().numpy()
+    #X, Y = X_sampler.sample(num_samples), Y_sampler.sample(num_samples)
+    #X_np, Y_np = X.cpu().numpy(), Y.cpu().numpy()
     
     # fig, axes = plt.subplots(1, 4, figsize=(12, 3), dpi=150)
     
