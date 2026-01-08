@@ -14,12 +14,12 @@ output         = condor/logs/$(experiment)-$(Cluster)_output-$(Process).txt
 error          = condor/logs/$(experiment)-$(Cluster)_error-$(Process).txt
 log            = condor/logs/$(experiment)-$(Cluster)_log-$(Process).txt
 
-require_gpus   = (Capability >= 8.0) && (GlobalMemoryMb >= 40000)
+require_gpus   = (Capability >= 8.0) && (GlobalMemoryMb >= 80000)
 request_memory = 200GB
-request_gpus   = 4
+request_gpus   = 8
 request_cpus   = 30
 request_disk   = 150GB
-+GPUJobLength  = "short"
++GPUJobLength  = "medium"
 +WantGPULab    = true
 
 executable = condor/scripts/run_experiment.sh

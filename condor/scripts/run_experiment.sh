@@ -16,10 +16,8 @@ export HF_TOKEN="***REMOVED***"
 #export TRITON_CACHE_DIR="/staging/$username/.cache/triton_cache"
 #export HF_DATASETS_CACHE="/staging/$username/.cache/huggingface/dataset"
 
-# Run training + inference; only if BOTH succeed, copy results
-if python3 -m TF4OT.run_training  --config-name "$experiment_name" && \
-   python3 -m TF4OT.run_inference --config-name "$experiment_name"
-then
+# Run training only if it succeeds, copy results
+if python3 -m TF4OT.run_training  --config-name "$experiment_name" then
     # copy results back to /staging
     experiment_dir_output="./experiments/cost*"
     experiment_dir_output_staging="/staging/$username/experiments"
@@ -31,6 +29,6 @@ then
     rsync -ah --progress $experiment_dir_output/. "$experiment_dir_output_staging"
     ls -l "$experiment_dir_output_staging"
 else
-    echo "Training or inference failed, not copying results to /staging" >&2
+    echo "Training failed, not copying results to /staging" >&2
     exit 1
 fi
