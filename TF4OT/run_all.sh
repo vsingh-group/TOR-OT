@@ -10,7 +10,7 @@ mkdir -p "$LOGDIR"
 # FIXED COST
 # 100K data
 #python3 -m TF4OT.run_training  --config-name TF_100K_cost_fixed     > $LOGDIR/train_TF_100K_cost_fixed.log 2>&1 && \
-#python3 -m TF4OT.run_inference --config-name TF_100K_cost_fixed     > $LOGDIR/eval_TF_100K_cost_fixed.log  2>&1
+python3 -m TF4OT.run_inference --config-name TF_100K_cost_fixed     > $LOGDIR/eval_TF_100K_cost_fixed.log  2>&1
 # 1M data
 #python3 -m TF4OT.run_training  --config-name TF_1M_cost_fixed       > $LOGDIR/train_TF_1M_cost_fixed.log 2>&1 && \
 #python3 -m TF4OT.run_inference --config-name TF_1M_cost_fixed       > $LOGDIR/eval_TF_1M_cost_fixed.log  2>&1
@@ -20,8 +20,8 @@ mkdir -p "$LOGDIR"
 
 # SEMIVARIABLE COST
 # 100K data
-python3 -m TF4OT.run_training  --config-name TF_100K_cost_semivariable  > $LOGDIR/train_TF_100K_cost_semivariable.log 2>&1 && \
-python3 -m TF4OT.run_inference --config-name TF_100K_cost_semivariable  > $LOGDIR/eval_TF_100K_cost_semivariable.log  2>&1
+#python3 -m TF4OT.run_training  --config-name TF_100K_cost_semivariable  > $LOGDIR/train_TF_100K_cost_semivariable.log 2>&1 && \
+#python3 -m TF4OT.run_inference --config-name TF_100K_cost_semivariable  > $LOGDIR/eval_TF_100K_cost_semivariable.log  2>&1
 # 1M data
 # python3 -m TF4OT.run_training  --config-name TF_1M_cost_semivariable  > $LOGDIR/train_TF_1M_cost_semivariable.log 2>&1 && \
 # python3 -m TF4OT.run_inference --config-name TF_1M_cost_semivariable  > $LOGDIR/eval_TF_1M_cost_semivariable.log  2>&1
@@ -41,3 +41,4 @@ python3 -m TF4OT.run_inference --config-name TF_100K_cost_semivariable  > $LOGDI
 # python3 -m TF4OT.run_inference --config-name TF_10M_cost_variable   > $LOGDIR/eval_TF_10M_cost_variable.log  2>&1
 
 #python3 TF4OT/evals/NOT/NOT_toy_1D_cost_weak.py
+python3 TF4OT/evals/NOT/NOT_toy_2D_cost_strong.py

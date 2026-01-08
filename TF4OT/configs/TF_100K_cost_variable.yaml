@@ -4,7 +4,7 @@
 # Override the defaults
 defaults:
   - data:       default
-  - model:      small
+  - model:      large
   - training:   default
   - tokenizer:  default
   - logging:    default
@@ -12,15 +12,16 @@ defaults:
 
 # Override specific parameters
 data:
-  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_cost_variable"
+  hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_sqeuclidean_variable_bins10"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
-    size_n:                100_000
-    size_s:                '100K'
+    size_n:                500_000
+    size_s:                '500K'
     support_size:          10
     input_total_dim:       21   # row-wise -> 2*support_size+1 
     input_cost_type:       "variable" # fixed, variable, semivariable
+    input_cost_metric:     "sqeuclidean" # only for "fixed" and "variable" costs
     input_cost_matrix_dim: 100  # support_size*support_size
     row_wise:              true
   loading:               
@@ -30,27 +31,11 @@ model:
   save_path:           "./experiments/cost_variable"
   num_prefix_tokens:   1
   use_flash_attention: true
-  # encoder:
-  # # encoder for distributions source:a and target:b
-  #   encoder_ab: 
-  #     #MLP encoder
-  #     input_dim:    ${data.dataset.input_total_dim}
-  #     emb_dim:      128
-  # # encoder for cost matrix
-  #   encoder_C:
-  #     #TF encoder
-  #     input_dim:    ${data.dataset.input_cost_matrix_dim}   # <-- link to feature_dim
-  #     emb_dim:      128
-  # decoder:
-  #   emb_dim:                128
-  #   seq_dim:                500
-  #   num_transformer_layers: 4
-  #   num_attention_heads:    4
-  #   dropout:                0
 
 training:
-  num_epochs:            6
-  batch_size_per_device: 3584
+  num_epochs:            10
+  #batch_size_per_device: 128 # medium model, d=30
+  batch_size_per_device: 192 # large model, bins=10
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1
@@ -68,10 +53,13 @@ tokenizer:
   #   num_mantissa_digits: 10
 
 inference:
+  max_seq_len:  64
   out_dir:      "./experiments/cost_variable"
   top_k_values: [null, 3, 5]
   top_p_values: [null, 0.1, 0.5]
   use_amp:      ${training.use_amp}
-  batch_size:   ${data.dataset.support_size}
-  test_all_testset: false           # Set to true to test all testset examples
-  test_custom_distributions: true   # Set to true to run distribution pair tests
+  batch_size:   1
+  testset_size: 10
+  test_over_testset:      true       # Set to true to test all testset examples
+  test_over_custom_pairs: true       # Set to true to run distribution pair tests
+  test_neural_ot:         false       # Set to true to run neural OT tests
