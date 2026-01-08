@@ -477,16 +477,6 @@ def main():
     print(f"Test samples: {len(dataset_dict['test'])}")
     print(f"Total samples: {len(dataset_dict['train']) + len(dataset_dict['test'])}")
 
-    # Print sample
-    print("\nSample from dataset:")
-    sample = dataset_dict['train'][0]
-    print(f"Source dist shape: {len(sample['source_dist'])}")
-    print(f"Target dist shape: {len(sample['target_dist'])}")
-    if args.row_wise:
-        print(f"Input idx: {sample['input_idx']}")
-    print(f"Input total shape: {len(sample['input_total'])}")
-    #print(f"Output map sparse: {sample['output_map_sparse'][:100]}...")
-
     # Upload to Hugging Face Hub if requested
     if args.upload:
         if not args.repo_name:
