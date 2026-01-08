@@ -195,7 +195,8 @@ def ot_sample_generator(n_bins: int, dataset_size: int, metric = 'sqeuclidean', 
                 # For semivariable, insert input_cost *before* input_cost_matrix
                 #if cost_type == 'semivariable':
                 sample['input_cost_type']  = metric_one_hot
-                sample['input_cost_matrix'] = C.tolist()
+                if cost_type == 'variable':
+                    sample['input_cost_matrix'] = C.tolist()
                 sample['input_idx']   = input_idx
                 sample['input_total'] = input_total.tolist()
                 # sample['target_otplan_emd_sparse'] = coo_tolist(otplan_emd_sparse, j)
@@ -409,6 +410,7 @@ def main():
     parser.add_argument("--repo_name", type=str, help="Repository name for Hugging Face Hub (e.g., 'username/ot-dataset')")
     parser.add_argument("--token", type=str, help="Hugging Face token (if not provided, will use token from huggingface_hub login)")
     parser.add_argument("--private", action="store_true", help="Make the repository private")
+    parser.add_argument("--cache_dir", type=str, default=None, help="Directory for caching generated datasets")
 
     args = parser.parse_args()
 
@@ -432,7 +434,8 @@ def main():
         raise ValueError("Invalid cost type")
     print(f"Cost type: {cost_type}")
     dataset = Dataset.from_generator(
-        lambda: ot_sample_generator(args.n_bins, args.dataset_size, args.metric, cost_type, args.row_wise, args.device, args.dim)
+        lambda: ot_sample_generator(args.n_bins, args.dataset_size, args.metric, cost_type, args.row_wise, args.device, args.dim),
+        cache_dir=args.cache_dir
     )
 
     # Split into train/test
