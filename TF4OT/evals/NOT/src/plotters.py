@@ -160,7 +160,7 @@ def plot_bar_and_stochastic_2D(X_sampler, Y_sampler, T, ZD, Z_STD, plot_discrete
     fig.tight_layout()
     return fig, axes
 
-def plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1024, num_bins=(5,6), rng=None):
+def plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1024, num_bins=36, rng=None):
     DIM = 2
     freeze(T)
 
@@ -191,7 +191,7 @@ def plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1024, num_
     # axes[2].hist2d(T_XZ_np[:, 0], T_XZ_np[:, 1], bins=[num_bins[0], num_bins[1]], cmap='viridis', range=rng)
     
     # Compute Transport Plan Matrix (Source Bins vs Target Bins)
-    nx, ny = num_bins
+    nx, ny = num_bins, num_bins
     x_edges = np.linspace(-2.5, 2.5, nx + 1)
     y_edges = np.linspace(-2.5, 2.5, ny + 1)
     

@@ -75,6 +75,7 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
 
     #MAX_STEPS = 5001
     MAX_STEPS = 2501
+    #MAX_STEPS = 251
     PLOT_INTERVAL = MAX_STEPS-1
     SEED = 0x000000
 

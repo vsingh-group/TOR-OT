@@ -75,7 +75,7 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
 
     #PLOT_INTERVAL = 200
     #MAX_STEPS = 10_001
-    MAX_STEPS = 1_001
+    MAX_STEPS = 5_001
     SEED = 0x000000
 
     DIM = 2
@@ -181,7 +181,7 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
         # gc.collect()
         # torch.cuda.empty_cache()
     print("2d neural ot run completed")
-    plan_matrix = plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1_000_000, num_bins=(5,6))
+    plan_matrix = plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1_000_000, num_bins=num_bins)
     return plan_matrix
 
 
