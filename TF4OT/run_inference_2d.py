@@ -1837,7 +1837,7 @@ def eval_all_2d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                     
                     try:
                         # We suppress the figure display from NOT routine by catching the figure result and closing it.
-                        res_not = NOT_toy_2D_cost_strong.main_routine(X_sampler, Y_sampler, nx*ny, rng=None, metric=cfg.data.dataset.input_cost_metric)
+                        res_not = NOT_toy_2D_cost_strong.main_routine(X_sampler, Y_sampler, nx, rng=None, metric=cfg.data.dataset.input_cost_metric)
                         
                         if isinstance(res_not, tuple) and len(res_not) == 3:
                             fig_not, axes_not, ot_plan_not_dense = res_not

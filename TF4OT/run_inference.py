@@ -952,7 +952,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
     if cost_type == 'fixed':
         metrics = [cfg.data.dataset.input_cost_metric]
     elif cost_type == 'semivariable':
-        metrics = utils.metrics
+        metrics = [cfg.data.dataset.input_cost_metric]
     elif cost_type == 'variable':
         metrics = [cfg.data.dataset.input_cost_metric]
 
@@ -989,7 +989,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                     xs[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
                     xt[:, 0] = np.arange(n_bins, dtype=my_dtype_np)
                     # one-hot encode the current metric
-                    metric_one_hot = [1.0 if m == metric else 0.0 for m in metrics]
+                    metric_one_hot = [1.0 if m == metric else 0.0 for m in utils.metrics]
                 elif cost_type == 'variable':
                     # n_bins defined elsewhere
                     x_low = 0; x_high = n_bins
@@ -1547,6 +1547,17 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
 
         with open(notebook_path, 'w') as f:
             nbformat.write(nb, f)
+
+        # Save the results list as well for later reconstruction
+        # These are lists of floats, so np.save is appropriate
+        results_path_tot = os.path.join(model_base_path, f'eval_all_pairs_1d_{metric}_results_tot.npy')
+        results_path_not = os.path.join(model_base_path, f'eval_all_pairs_1d_{metric}_results_not.npy')
+        
+        np.save(results_path_tot, np.array(all_results_tot))
+        np.save(results_path_not, np.array(all_results_not))
+        
+        logger.info(f"Saved TOT results to: {results_path_tot}")
+        logger.info(f"Saved NOT results to: {results_path_not}")
 
         logger.info(f"Saved notebook to: {notebook_path}")
         logger.info(f"Open with: jupyter notebook {notebook_path}")

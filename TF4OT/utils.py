@@ -10,7 +10,6 @@ import io
 #mydtype = torch.float32
 my_dtype_np    = np.float32
 my_dtype_torch = torch.float32
-#metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'canberra']
 metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'chebyshev', 'canberra', 'minkowski']
 
 
