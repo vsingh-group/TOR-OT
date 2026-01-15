@@ -3,7 +3,8 @@ from TF4OT import tokenizers
 from TF4OT import model
 from TF4OT import utils
 from TF4OT.utils import my_dtype_np, my_dtype_torch
-from TF4OT.evals.NOT import NOT_toy_1D_cost_weak, NOT_toy_1D_cost_strong
+from TF4OT.evals.NOT import NOT_toy_1D_cost_strong
+
 import ot.plot
 import matplotlib.pylab as pl
 import matplotlib.pyplot as plt
@@ -87,9 +88,69 @@ def inference_routine(cfg):
     logger.info("Loading dataset: " + cfg.data.hf_dataset)
     dataset         = load_dataset(cfg.data.hf_dataset, cache_dir=cfg.data.hf_cache_dir)
     test_data       = dataset["test"]
-    testset_size    = cfg.inference.testset_size * cfg.data.dataset.support_size
-    test_data_adjusted  = test_data.select(range(testset_size))
+    
+    cost_type       = cfg.data.dataset.input_cost_type
     batch_size_adjusted = cfg.inference.batch_size * cfg.data.dataset.support_size
+
+    if cost_type == 'semivariable':
+        # Select only samples with that specific input_cost_metric
+        # We scan the dataset until we find enough examples matching the target metric.
+        target_metric = cfg.data.dataset.input_cost_metric
+        target_testset_size = cfg.inference.testset_size
+        support_size = cfg.data.dataset.support_size
+        row_wise = cfg.data.dataset.get("row_wise", False)
+        
+        logger.info(f"Semivariable cost: Filtering for {target_testset_size} examples of metric '{target_metric}'...")
+        
+        selected_indices = []
+        examples_found = 0
+        
+        # Scan dataset efficiently (stop once satisfied)
+        if row_wise:
+            num_blocks = len(test_data) // support_size
+            for i in range(num_blocks):
+                if examples_found >= target_testset_size:
+                    break
+                
+                start_idx = i * support_size
+                # Check metric of the first row in the block
+                sample = test_data[start_idx]
+                onehot = sample[OT_INPUT_COST_ONEHOT]
+                if isinstance(onehot, list): onehot = np.array(onehot)
+                metric_idx = np.argmax(onehot)
+                metric_name = utils.metrics[metric_idx]
+                
+                if metric_name == target_metric:
+                    # found a match, add all rows for this block
+                    selected_indices.extend(range(start_idx, start_idx + support_size))
+                    examples_found += 1
+        else:
+            for i in range(len(test_data)):
+                if examples_found >= target_testset_size:
+                    break
+                
+                sample = test_data[i]
+                onehot = sample[OT_INPUT_COST_ONEHOT]
+                if isinstance(onehot, list): onehot = np.array(onehot)
+                metric_idx = np.argmax(onehot)
+                metric_name = utils.metrics[metric_idx]
+                
+                if metric_name == target_metric:
+                    selected_indices.append(i)
+                    examples_found += 1
+                    
+        if examples_found < target_testset_size:
+            logger.warning(f"Could only find {examples_found} examples for metric {target_metric} (requested {target_testset_size})")
+            
+        test_data_adjusted = test_data.select(selected_indices)
+        testset_size = len(test_data_adjusted)
+        logger.info(f"Selected {testset_size} rows ({examples_found} examples).")
+
+    else:
+        # Original logic for fixed/variable
+        testset_size    = cfg.inference.testset_size * cfg.data.dataset.support_size
+        test_data_adjusted  = test_data.select(range(testset_size))
+        
     test_loader = DataLoader(test_data_adjusted,
                             batch_size=batch_size_adjusted,
                             shuffle=False,
@@ -97,7 +158,7 @@ def inference_routine(cfg):
                             pin_memory=(device.type == "cuda"),
                             collate_fn=utils.collate_from_string
     )
-    logger.info(f"test_size={len(test_data_adjusted)}, batch_size={batch_size_adjusted}, "
+    logger.info(f"test_size={len(test_data_adjusted)} rows, batch_size={batch_size_adjusted}, "
                 f"batches_per_epoch={len(test_loader)}")
 
     # Create Tokenizer
@@ -120,6 +181,28 @@ def inference_routine(cfg):
 
 
 
+def get_cost_matrix(metric, n_bins, device):
+    x_norm = torch.linspace(0, 1, n_bins, device=device).view(-1, 1)
+    if metric == 'sqeuclidean':
+        C = torch.cdist(x_norm, x_norm, p=2)**2
+    elif metric == 'euclidean':
+        C = torch.cdist(x_norm, x_norm, p=2)
+    elif metric == 'cityblock':
+        C = torch.cdist(x_norm, x_norm, p=1)
+    elif metric == 'chebyshev':
+        C = torch.cdist(x_norm, x_norm, p=float('inf'))
+    elif metric == 'minkowski':
+        C = torch.cdist(x_norm, x_norm, p=3)
+    elif metric == 'canberra':
+        from scipy.spatial.distance import cdist
+        x_np = x_norm.cpu().numpy()
+        C_np = cdist(x_np, x_np, metric='canberra')
+        C = torch.from_numpy(C_np).float().to(device)
+    else:
+        # Fallback default sqeuclidean
+        C = torch.cdist(x_norm, x_norm, p=2)**2
+    return C
+
 def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=None,
                      test_batches=None, device=None, model_name=None):
     """
@@ -133,240 +216,447 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     if model_name is None:
         model_name = "model"
 
+    # Initialize lists to collect metrics and figures
+    all_mae_sparse       = []
+    all_mape_sparse      = []
+    all_hellinger_sparse = []
+    all_otcost_diff      = []
+    all_tv_sparse        = []
+    all_figures          = []
+    all_results          = []
+    
+    # Per-metric results
+    results_by_metric = {m: {'mae': [], 'mape': [], 'hellinger': [], 'otcost_diff': [], 'tv': [], 'count': 0, 'fig_count': 0} 
+                        for m in utils.metrics}
+                        
+    # Additional results for Neural OT (NOT)
+    results_not = {'mae': [], 'mape': [], 'hellinger': [], 'otcost_diff': [], 'tv': []}
+    results_by_metric_not = {m: {'mae': [], 'mape': [], 'hellinger': [], 'otcost_diff': [], 'tv': [], 'count': 0} 
+                        for m in utils.metrics}
+
+    # Track which metrics were actually encountered
+    seen_metrics = set()
+
     n_bins      = cfg.data.dataset.support_size
     cost_type   = cfg.data.dataset.input_cost_type
-    
-    # Determine metrics to evaluate
-    if cost_type == 'semivariable':
-        # Evaluate all metrics if semivariable
-        metrics_to_eval = utils.metrics
-    else:
-        # Fixed or variable: assume single metric configuration or implied
-        metrics_to_eval = [cfg.data.dataset.input_cost_metric]
+    batch_size  = cfg.inference.batch_size
+    fig_counter = 0
+    fig_counter_max = 20
 
-    # Pre-calculate normalized grid for cost matrix generation
-    # Assuming standard grid on [0, 1] for 1D distributions
-    x_norm = torch.linspace(0, 1, n_bins).view(-1, 1)
 
-    for metric in metrics_to_eval:
-        logger.info(f"Evaluating testset for metric: {metric}")
-        
-        # Initialize lists to collect metrics and figures for THIS metric
-        all_mae_sparse       = []
-        all_mape_sparse      = []
-        all_hellinger_sparse = []
-        all_otcost_diff      = []
-        all_tv_sparse        = []
-        # all_figures          = [] # Figures are heavy, maybe skip or limit?
-        # all_results          = []
 
-        fig_counter = 0
-        fig_counter_max = 5 # Limit figures per metric
+    # Precompute cost matrices
+    cost_matrices = {}
+    for m in utils.metrics:
+        cost_matrices[m] = get_cost_matrix(m, n_bins, device)
 
-        with torch.no_grad():
-            pbar = tqdm(test_batches, total=cfg.inference.testset_size, leave=False)
-            for batch_idx, batch in enumerate(pbar):
+    with torch.no_grad():
+        pbar = tqdm(test_batches, total=cfg.inference.testset_size, leave=False) # total is in examples
+        for batch_idx, batch in enumerate(pbar):
 
-                # 1. Prepare Inputs
-                encoder_input_ab = batch[OT_INPUT_TOTAL].to(device)
+
+
+            # Run model INFERENCE
+            encoder_input_ab = batch[OT_INPUT_TOTAL].to(device)
+            if cost_type == 'fixed':
+                encoder_input_c = None
+            elif cost_type == 'variable':
+                encoder_input_c = batch[OT_INPUT_COST_MATRIX].flatten(start_dim=1).to(device)
+            elif cost_type == 'semivariable':
+                encoder_input_c = batch[OT_INPUT_COST_ONEHOT].flatten(start_dim=1).to(device)
+            text_ids_pred = pytorch_model.generate(encoder_input_ab=encoder_input_ab,
+                                                   encoder_input_c=encoder_input_c,
+                                                   temperature=0.1,
+                                                   max_seq_len=cfg.inference.max_seq_len
+                                                   )
+            # text_ids_pred.shape: (batch_size, max_seq_len)
+            text_pred_list = tokenizer.from_tokens(text_ids_pred)
+            # len(text_pred_list): batch_size
+            # parse text in chunks of support_size
+            text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred_list]
+
+            text_pred_dense = [utils.parse_predicted_sparse_row_string(t, cfg.data.dataset.support_size, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred ]
+            ot_pred_dense_batch   = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
+            ot_pred_dense_batch   = torch.from_numpy(ot_pred_dense_batch).to(dtype=my_dtype_torch)
+
+            # loop over batch (rows)
+            for k in range(0, test_batches.batch_size, n_bins):
+                #print("processing item", k)
+
+                start = k
+                end   = min(k + n_bins, test_batches.batch_size)
+
+                ot_pred_dense   = ot_pred_dense_batch[start:end].detach()
+                ot_pred_sparse  = sparse.coo_matrix(ot_pred_dense.cpu().numpy())
+
+                ot_target_sparse_rows = batch[OT_TARGET_PLAN_MATRIX_SPARSE][start:end]
+                # Reconstruct sparse matrix from rows
+                # Each row i (0 to n_bins-1) is a list [c, v, c, v, ...]
+                gt_rows = []
+                gt_cols = []
+                gt_data = []
+                for i, row_data in enumerate(ot_target_sparse_rows):
+                    if isinstance(row_data, torch.Tensor):
+                        row_data = row_data.tolist()
+                    # row_data is [col, val, col, val, ...]
+                    for idx in range(0, len(row_data), 2):
+                         c = int(row_data[idx])
+                         v = float(row_data[idx+1])
+                         gt_rows.append(i)
+                         gt_cols.append(c)
+                         gt_data.append(v)
                 
-                # 2. Prepare Cost Input (One-Hot or Matrix) & Ground Truth Cost Matrix
-                if cost_type == 'semivariable':
-                    # Create one-hot encoding for the CURRENT metric
-                    # vector shape: (num_metrics,) -> expand to (batch, seq_len, num_metrics) ?
-                    # run_inference_2d / eval_all_1d logic:
-                    # encoder_input_c is (batch, num_metrics) or (batch, seq, num_metrics)?
-                    # In eval_all_1d line 1103: encoder_input_c.append(torch.tensor(metric_one_hot)) per BIN
-                    # So shape is (batch, seq_len, num_metrics)
-                    
-                    metric_idx = utils.metrics.index(metric)
-                    num_metrics = len(utils.metrics)
-                    one_hot = torch.zeros(num_metrics, device=device)
-                    one_hot[metric_idx] = 1.0
-                    
-                    # Expand to match batch and seq_len
-                    # encoder_input_ab shape: (B, seq_len, dim)
-                    B, S, _ = encoder_input_ab.shape
-                    # encoder_input_c shape: (B, S, num_metrics)
-                    encoder_input_c = one_hot.view(1, 1, -1).expand(B, S, -1)
-                    
-                    # Generate Cost Matrix C for Ground Truth
-                    # Re-generate C because we are forcing a metric check
-                    if metric == 'sqeuclidean':
-                        C = torch.cdist(x_norm, x_norm, p=2)**2
-                    elif metric == 'euclidean':
-                        C = torch.cdist(x_norm, x_norm, p=2)
-                    elif metric == 'cityblock':
-                        C = torch.cdist(x_norm, x_norm, p=1)
-                    elif metric == 'chebyshev':
-                        C = torch.cdist(x_norm, x_norm, p=float('inf'))
-                    elif metric == 'minkowski':
-                        C = torch.cdist(x_norm, x_norm, p=3)
-                    elif metric == 'canberra':
-                        from scipy.spatial.distance import cdist
-                        x_np = x_norm.numpy()
-                        C_np = cdist(x_np, x_np, metric='canberra')
-                        C = torch.from_numpy(C_np).float()
-                    else:
-                        C = torch.cdist(x_norm, x_norm, p=2)**2 # default
-                    
-                    C = C.to(device)
-                    
-                elif cost_type == 'fixed':
-                    encoder_input_c = None
-                    # Use existing logic for fixed C generation based on cfg metric
-                    # (Code reused from previous fix/implementation inside loop if needed, 
-                    # but here we iterate metrics_to_eval which has only 1 item for fixed)
-                    # For robust code, we re-generate C here too.
-                    
-                    if metric == 'sqeuclidean':
-                        C = torch.cdist(x_norm, x_norm, p=2)**2
-                    elif metric == 'euclidean':
-                        C = torch.cdist(x_norm, x_norm, p=2)
-                    elif metric == 'cityblock':
-                        C = torch.cdist(x_norm, x_norm, p=1)
-                    elif metric == 'chebyshev':
-                        C = torch.cdist(x_norm, x_norm, p=float('inf'))
-                    elif metric == 'minkowski':
-                        C = torch.cdist(x_norm, x_norm, p=3)
-                    elif metric == 'canberra':
-                        from scipy.spatial.distance import cdist
-                        x_np = x_norm.numpy()
-                        C_np = cdist(x_np, x_np, metric='canberra')
-                        C = torch.from_numpy(C_np).float()
-                    else:
-                        C = torch.cdist(x_norm, x_norm, p=2)**2
-                    C = C.to(device)
+                ot_target_sparse = sparse.coo_matrix((gt_data, (gt_rows, gt_cols)), shape=(n_bins, n_bins))
+                ot_target_dense  = ot_target_sparse.toarray() # Needed for plotting and some metrics if not sparse-optimized
 
+                # Determine metric and cost matrix
+                current_metric_name = "unknown"
+                if cost_type == 'fixed':
+                    current_metric_name = cfg.data.dataset.input_cost_metric
+                    if current_metric_name in cost_matrices:
+                         C = cost_matrices[current_metric_name]
+                    else:
+                         C = get_cost_matrix(current_metric_name, n_bins, device)
+                elif cost_type == 'semivariable':
+                    # Fix: use batch index properly relative to batch start
+                    # k is absolute index in batch (0, n_bins, 2*n_bins...)
+                    # batch[OT_INPUT_COST_ONEHOT] has shape (batch_size, num_metrics)
+                    # We need the row index corresponding to the current example
+                    # For row-wise, all rows in an example share the same metric?
+                    # Assuming batch is collated correctly.
+                    # wait, get_cost_matrix logic used k which is index in batch.
+                    metric_idx = batch[OT_INPUT_COST_ONEHOT][k].argmax().item()
+                    current_metric_name = utils.metrics[metric_idx]
+                    C = cost_matrices[current_metric_name]
                 else: # variable
-                    # Variable cost: C is input
-                    # encoder_input_c = batch[OT_INPUT_COST_MATRIX].flatten(start_dim=1).to(device)?
-                    # Row-wise variable means C is provided.
-                    # We can't really re-evaluate variable cost on *different* metrics easily 
-                    # unless we re-generate the input variable C? 
-                    # Assuming we stick to the dataset provided C for variable.
-                    encoder_input_c = batch[OT_INPUT_COST_MATRIX].flatten(start_dim=1).to(device)
-                    C = batch[OT_INPUT_COST_MATRIX] # Shape? (B, n, n)? Or row-wise?
-                    # Actually for variable, C might vary per sample.
-                    # Let's rely on batch structure for variable.
-                    pass 
+                    # For variable cost, C is provided directly
+                    C = batch[OT_INPUT_COST_MATRIX][k] 
+                    # Note: handling variable cost matrix shape and repetition might depend on data format
+                    # Ignoring specific metric name for variable cost unless provided elsewhere
+                    
+                seen_metrics.add(current_metric_name)
 
-                # 3. Run Inference
-                text_ids_pred = pytorch_model.generate(
-                    encoder_input_ab=encoder_input_ab,
-                    encoder_input_c=encoder_input_c,
-                    temperature=0.1,
-                    max_seq_len=cfg.inference.max_seq_len
-                )
+                # --- Run Neural OT (NOT) ---
+                # Prepare samplers
+                # Input source and target from batch
+                # OT_INPUT_TOTAL: [source, target]
+                input_total_vec = batch[OT_INPUT_TOTAL][k]
+                source_hist = input_total_vec[:n_bins]
+                target_hist = input_total_vec[n_bins:2*n_bins]
                 
-                text_pred_list = tokenizer.from_tokens(text_ids_pred)
-                text_pred = [t[:t.find(']')+1] if (']' in t) else t for t in text_pred_list]
-                text_pred_dense = [utils.parse_predicted_sparse_row_string(t, n_bins, mode='index', precision=cfg.tokenizer.DigitTokenizer.decimal_precision) for t in text_pred]
-                ot_pred_dense_batch = np.stack([np.fromstring(t[1:-1], sep=',') for t in text_pred_dense])
-                ot_pred_dense_batch = torch.from_numpy(ot_pred_dense_batch).to(dtype=my_dtype_torch)
+                # Create samplers
+                # Using hardcoded range (-2.5, 2.5) as in NOT code or (0, 1) as in inference?
+                # --- Run Neural OT (NOT) ---
+                # Determine if we should run NOT
+                # Helper flag: run if enabled in config AND cost type is not semivariable (as requested)
+                # AND only for the first 10% of batches to save time
+                num_batches = len(test_batches)
+                not_cutoff = int(num_batches * 0.1)
+                run_neural_ot = cfg.inference.test_neural_ot and (cost_type != 'semivariable') and (batch_idx < not_cutoff)
+                
+                ot_pred_sparse_not = None
+                mae_not = -1.0
+                mape_not = -1.0
+                hellinger_not = -1.0
+                tv_not = -1.0
+                otcost_diff_not = -1.0
 
-                # 4. Evaluation Loop (per sample in batch)
-                # We need to compute Ground Truth OT if we changed the metric (semivariable)
-                # Or extract from batch if fixed/variable?
-                # For consistency, let's RE-COMPUTE GT using POT for semivariable/fixed 
-                # to ensure metric alignment.
-                
-                # Extract Source/Target prob vectors from input
-                # OT_INPUT_TOTAL shape (B, S, D). D=3? [source, target, pos]
-                # source = batch[OT_INPUT_TOTAL][:, :, 0] 
-                # target = batch[OT_INPUT_TOTAL][:, :, 1]
-                sources = batch[OT_INPUT_TOTAL][:, :, 0].cpu().numpy()
-                targets = batch[OT_INPUT_TOTAL][:, :, 1].cpu().numpy()
-                
-                batch_size_curr = len(sources)
-                
-                for k in range(batch_size_curr):
-                    # Prediction
-                    ot_pred_dense = ot_pred_dense_batch[k]
-                    ot_pred_sparse = sparse.coo_matrix(ot_pred_dense.cpu().numpy())
+                if run_neural_ot:
+                    # Prepare samplers
+                    # Input source and target from batch
+                    # OT_INPUT_TOTAL: [source, target]
+                    input_total_vec = batch[OT_INPUT_TOTAL][k]
+                    source_hist = input_total_vec[:n_bins]
+                    target_hist = input_total_vec[n_bins:2*n_bins]
                     
-                    # Ground Truth Calculation
-                    if cost_type == 'variable':
-                        # Use batch provided GT for variable? Or C?
-                        # TODO: check variable logic. Assuming semivariable/fixed here.
-                        # Fallback for now: use batch GT (might be mismatch if we didn't recompute C)
-                        # NOTE: The user specifically asked for SEMIVARIABLE case.
-                        ot_target_dense = batch['target_otplan_dense'][k].numpy() # shape?
-                        # sparse is in batch[OT_TARGET_PLAN_MATRIX_SPARSE]
-                        # Lets reconstruct sparse from batch for Variable
-                        # ... (existing sparse reconstruction logic)
-                        # Reusing existing logic for rows extraction:
-                        # But wait, we iterate batches. k index inside batch.
-                        # Existing code had nested loop 'for k in range(..., n_bins)'.
-                        # The existing code treated 'batch' as one large tensor and iterated?
-                        # No, DataLoader batching.
-                        
-                        # Let's stick to POT solve for Fixed/Semivariable
-                        pass
-                        
-                    # Re-solve OT for Ground Truth
-                    # C is shape (n, n)
-                    source_k = sources[k]
-                    target_k = targets[k]
+                    X_sampler = utils.HistogramSampler(source_hist, ranges=(0, 1), device=device)
+                    Y_sampler = utils.HistogramSampler(target_hist, ranges=(0, 1), device=device)
                     
-                    # Normalize source/target to sum to 1 (numerical stability)
-                    s_sum = source_k.sum()
-                    t_sum = target_k.sum()
-                    if s_sum > 0: source_k /= s_sum
-                    if t_sum > 0: target_k /= t_sum
+                    # Run NOT
+                    # Using config value for max steps
+                    not_max_steps = cfg.inference.neural_ot_max_steps
+                    rng = None
                     
-                    # C might be tensor
-                    if isinstance(C, torch.Tensor):
-                        C_np = C.cpu().numpy()
+                    # Call NOT routine
+                    # Returns: ot_plan_T (X_T_bar), ot_plan_hist (normalized histogram)
+                    with torch.enable_grad():
+                        _, ot_pred_dense_not_np = NOT_toy_1D_cost_strong.main_routine(
+                            X_sampler, Y_sampler, num_bins=n_bins, rng=(0, 1), metric=current_metric_name, 
+                            max_steps=not_max_steps, verbose=False
+                        )
+                    
+                    ot_pred_dense_not = torch.from_numpy(ot_pred_dense_not_np).to(dtype=my_dtype_torch, device=device)
+                    ot_pred_sparse_not = sparse.coo_matrix(ot_pred_dense_not.cpu().numpy())
+
+                # --- Metrics for TOT ---
+                # Calculate MAE
+                mae_sparse  = utils.sparse_mean_abs_error(ot_target_sparse, ot_pred_sparse)
+                # Calculate MAPE
+                mape_sparse = utils.sparse_weighted_mean_abs_percentage_error(ot_target_sparse, ot_pred_sparse)
+                # Calculate Hellinger
+                hellinger_sparse = utils.sparse_hellinger_distance(ot_target_sparse, ot_pred_sparse)
+                # Calculate Total Variation
+                tv_sparse = utils.sparse_total_variation(ot_target_sparse, ot_pred_sparse)
+                # Calculate OT cost diff
+                if cost_type == 'variable':
+                    # C might be flattened or (N,N), ensure it's (N,N) for sum
+                     if C.dim() == 1:
+                         C = C.view(n_bins, n_bins)
+                
+                otcost_gt     = (ot_target_dense * C.cpu().numpy()).sum().item() # C is on device, move to cpu for numpy mult or use torch
+                otcost_pred   = (ot_pred_dense.cpu().numpy() * C.cpu().numpy()).sum().item()
+                otcost_diff   = abs(otcost_pred - otcost_gt)
+
+                # Calculate metrics for NOT
+                if run_neural_ot:
+                    mae_not  = utils.sparse_mean_abs_error(ot_target_sparse, ot_pred_sparse_not)
+                    mape_not = utils.sparse_weighted_mean_abs_percentage_error(ot_target_sparse, ot_pred_sparse_not)
+                    hellinger_not = utils.sparse_hellinger_distance(ot_target_sparse, ot_pred_sparse_not)
+                    tv_not = utils.sparse_total_variation(ot_target_sparse, ot_pred_sparse_not)
+                    
+                    otcost_pred_not = (ot_pred_dense_not.cpu().numpy() * C.cpu().numpy()).sum().item()
+                    otcost_diff_not = abs(otcost_pred_not - otcost_gt)
+
+                # Collect metrics for TOT
+                all_mae_sparse.append(mae_sparse)
+                all_mape_sparse.append(mape_sparse)
+                all_hellinger_sparse.append(hellinger_sparse)
+                all_otcost_diff.append(otcost_diff)
+                all_tv_sparse.append(tv_sparse)
+                
+                # Collect metrics for NOT
+                if run_neural_ot:
+                    results_not['mae'].append(mae_not)
+                    results_not['mape'].append(mape_not)
+                    results_not['hellinger'].append(hellinger_not)
+                    results_not['otcost_diff'].append(otcost_diff_not)
+                    results_not['tv'].append(tv_not)
+                
+                # Collect per-metric metrics (TOT)
+                if current_metric_name in results_by_metric:
+                    results_by_metric[current_metric_name]['mae'].append(mae_sparse)
+                    results_by_metric[current_metric_name]['mape'].append(mape_sparse)
+                    results_by_metric[current_metric_name]['hellinger'].append(hellinger_sparse)
+                    results_by_metric[current_metric_name]['otcost_diff'].append(otcost_diff)
+                    results_by_metric[current_metric_name]['tv'].append(tv_sparse)
+                    results_by_metric[current_metric_name]['count'] += 1
+                    
+                # Collect per-metric metrics (NOT)
+                if run_neural_ot and current_metric_name in results_by_metric_not:
+                    results_by_metric_not[current_metric_name]['mae'].append(mae_not)
+                    results_by_metric_not[current_metric_name]['mape'].append(mape_not)
+                    results_by_metric_not[current_metric_name]['hellinger'].append(hellinger_not)
+                    results_by_metric_not[current_metric_name]['otcost_diff'].append(otcost_diff_not)
+                    results_by_metric_not[current_metric_name]['tv'].append(tv_not)
+                    results_by_metric_not[current_metric_name]['count'] += 1
+
+                # Store results for table
+                row_data = {
+                    'batch_idx': k,
+                    'mae_sparse': mae_sparse,
+                    'mape_sparse': mape_sparse,
+                    'hellinger_sparse': hellinger_sparse,
+                    'otcost_diff': otcost_diff,
+                    'tv_sparse': tv_sparse,
+                    'metric': current_metric_name
+                }
+                if run_neural_ot:
+                    row_data['mae_not'] = mae_not
+                    row_data['otcost_diff_not'] = otcost_diff_not
+                    
+                all_results.append(row_data)
+
+                # Only create figures for first few batches (per metric if semivariable)
+                create_fig = False
+                if cost_type == 'semivariable':
+                     if current_metric_name in results_by_metric: # Should always be true
+                         if results_by_metric[current_metric_name]['fig_count'] < fig_counter_max:
+                             create_fig = True
+                             results_by_metric[current_metric_name]['fig_count'] += 1
+                else:
+                     if fig_counter < fig_counter_max:
+                         create_fig = True
+                         fig_counter += 1
+
+                if create_fig:
+                    # Create visualization for first sample in batch
+                    # Extract source and target from OT_INPUT_TOTAL
+                    # OT_INPUT_TOTAL structure: [source (n_bins), target (n_bins), input_idx (1)]
+                    input_total_vec = batch[OT_INPUT_TOTAL][k]
+                    source = input_total_vec[:n_bins].cpu().numpy()
+                    target = input_total_vec[n_bins:2*n_bins].cpu().numpy()
+                    input_cost_onehot = batch[OT_INPUT_COST_ONEHOT][k].cpu().numpy() if cost_type == 'semivariable' else None
+                    
+                    if run_neural_ot:
+                        fig, axarr = plt.subplots(1, 6, figsize=(21, 3.5), dpi=120)
                     else:
-                        C_np = C
-                        
-                    # POT Solve
-                    ot_target_dense = ot.emd(source_k, target_k, C_np)
-                    ot_target_sparse = sparse.coo_matrix(ot_target_dense)
+                        fig, axarr = plt.subplots(1, 5, figsize=(18, 3.5), dpi=120)
                     
-                    # Metrics
-                    mae_sparse = utils.sparse_mean_abs_error(ot_target_sparse, ot_pred_sparse)
-                    mape_sparse = utils.sparse_weighted_mean_abs_percentage_error(ot_target_sparse, ot_pred_sparse)
-                    hellinger_sparse = utils.sparse_hellinger_distance(ot_target_sparse, ot_pred_sparse)
-                    tv_sparse = utils.sparse_total_variation(ot_target_sparse, ot_pred_sparse)
-                    
-                    otcost_gt = (ot_target_dense * C_np).sum()
-                    otcost_pred = (ot_pred_dense.cpu().numpy() * C_np).sum()
-                    otcost_diff = abs(otcost_pred - otcost_gt)
-                    
-                    all_mae_sparse.append(mae_sparse)
-                    all_mape_sparse.append(mape_sparse)
-                    all_hellinger_sparse.append(hellinger_sparse)
-                    all_otcost_diff.append(otcost_diff)
-                    all_tv_sparse.append(tv_sparse)
-                    
-                    # Visualization (optional, similar to before)
-                    # ... [Skipping verbose viz code for brevity unless requested] ...
+                    fig.suptitle(f"Batch {k}", fontsize=16, y=1.02)
 
-                pbar.set_postfix({
-                    'mae': f'{np.mean(all_mae_sparse):.4e}',
-                    'ot_diff': f'{np.mean(all_otcost_diff):.4e}'
-                })
+                    # Titles
+                    if cost_type == 'semivariable':
+                         metric_title = utils.metrics[input_cost_onehot.argmax()]
+                    else:
+                         metric_title = current_metric_name
 
-        # Save results per metric
-        suffix = f"_{metric}" if (len(metrics_to_eval) > 1 or cost_type == 'semivariable') else ""
-        filename = f"eval_all_testset_results{suffix}.npz"
-        save_path = os.path.join(model_base_path, filename)
-        
-        np.savez(
-            save_path,
-            all_mae_sparse=np.array(all_mae_sparse),
-            all_mape_sparse=np.array(all_mape_sparse),
-            all_hellinger_sparse=np.array(all_hellinger_sparse),
-            all_otcost_diff=np.array(all_otcost_diff),
-            all_tv_sparse=np.array(all_tv_sparse)
-        )
-        logger.info(f"Saved results for {metric} to {filename}")
+                    axarr[0].set_title(f"Source $\\mu$ (1D)", fontsize=12)
+                    axarr[1].set_title(f"Target $\\nu$ (1D)", fontsize=12)
+                    axarr[2].set_title(f"Cost Matrix: {metric_title}", fontsize=12)
+                    axarr[3].set_title(r"$\pi$ Ground Truth (POT)", fontsize=12)
+                    axarr[4].set_title(r"$\hat{\pi}$ Ours (TOT)", fontsize=12)
+                    if run_neural_ot:
+                        axarr[5].set_title(r"$\hat{\pi}$ Neural OT (NOT)", fontsize=12)
+
+                    # Common vmin/vmax for OT plans
+                    vmin = 0
+                    if run_neural_ot:
+                        vmax = max(ot_pred_dense.max(), ot_target_dense.max(), ot_pred_dense_not.max()).item()
+                    else:
+                        vmax = max(ot_pred_dense.max(), ot_target_dense.max()).item()
+
+                    # --- Source (bar) ---
+                    bin_edges = np.arange(len(source))
+                    axarr[0].bar(
+                        bin_edges, source,
+                        width=1.0, color="tab:blue", alpha=0.7, edgecolor="black", align="edge", linewidth=0.5
+                    )
+                    axarr[0].set_xlim(0, len(source))
+                    axarr[0].set_ylim(0, max(source.max(), target.max()) * 1.1)
+                    axarr[0].set_xlabel("Bin index")
+                    axarr[0].set_ylabel("Probability")
+                    
+                    # --- Target (bar) ---
+                    bin_edges = np.arange(len(target))
+                    axarr[1].bar(
+                        bin_edges, target,
+                        width=1.0, color="tab:blue", alpha=0.7, edgecolor="black", align="edge", linewidth=0.5
+                    )
+                    axarr[1].set_xlim(0, len(target))
+                    axarr[1].set_ylim(0, max(source.max(), target.max()) * 1.1)
+                    axarr[1].set_xlabel("Bin index")
+                    axarr[1].set_ylabel("Probability")
+                    
+                    # --- Cost matrix ---
+                    im2 = axarr[2].imshow(C.cpu().numpy(), cmap='Blues', origin='lower', aspect="auto")
+                    axarr[2].set_xlabel("Target bins")
+                    axarr[2].set_ylabel("Source bins")
+                    plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
+
+                    # --- Ground Truth OT Plan ---
+                    im3 = axarr[3].imshow(ot_target_dense, cmap='Greens', origin='lower', aspect="auto", vmin=vmin, vmax=vmax)
+                    axarr[3].set_xlabel("Target bins")
+                    axarr[3].set_ylabel("Source bins")
+                    plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
+
+                    # --- Predicted OT Plan ---
+                    im4 = axarr[4].imshow(ot_pred_dense.cpu().numpy(), cmap='Reds', origin='lower', aspect="auto", vmin=vmin, vmax=vmax)
+                    axarr[4].set_xlabel("Target bins")
+                    axarr[4].set_ylabel("Source bins")
+                    plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
+
+                    # --- Neural OT Plan ---
+                    if run_neural_ot:
+                        im5 = axarr[5].imshow(ot_pred_dense_not.cpu().numpy(), cmap='Purples', origin='lower', aspect="auto", vmin=vmin, vmax=vmax)
+                        axarr[5].set_xlabel("Target bins")
+                        axarr[5].set_ylabel("Source bins")
+                        plt.colorbar(im5, ax=axarr[5], fraction=0.046, pad=0.04)
+
+                    plt.tight_layout()
+                    
+                    # Convert figure to base64 for html embedding
+                    buf = BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', dpi=120)
+                    buf.seek(0)
+                    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+                    buf.close()
+                    plt.close(fig)
+                    
+                    all_figures.append({
+                        'batch_idx': k,
+                        'img_base64': img_base64,
+                        'metric': current_metric_name
+                    })
+
+                    # Add error metrics text
+                    fig.text(0.5, -0.02, f'MAE (sparse): {mae_sparse:.3e}  |  ' +         
+                            f'MAPE (sparse): {mape_sparse:.3e}  |  ' +   
+                            f'OT Cost Diff: {otcost_diff:.3e}  |  ' +   
+                            f'Hellinger (sparse): {hellinger_sparse:.3e}  |  ' +
+                            f'TV (sparse): {tv_sparse:.3e}',
+                            ha='center', fontsize=11, bbox=dict(boxstyle='round',
+                            facecolor='lightyellow', alpha=0.8))
+
+                    plt.tight_layout()
+
+                    # Store figure for notebook as base64 string
+                    buf = BytesIO()
+                    fig.savefig(buf, format='png', bbox_inches='tight', dpi=120)
+                    buf.seek(0)
+                    img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+                    buf.close()
+                    plt.close(fig) # Close figure immediately to free memory
+
+                    all_figures.append({
+                        'img_base64': img_base64,
+                        'batch_idx': k,
+                        'metric': current_metric_name
+                    })
+
+            # Update progress bar with current metrics
+            pbar.set_postfix(
+                {
+                    'batch_idx': batch_idx,
+                    'mae_sparse': f'{np.mean(all_mae_sparse):.6e}',
+                    'mape_sparse': f'{np.mean(all_mape_sparse):.6e}',
+                    'hellinger_sparse': f'{np.mean(all_hellinger_sparse):.6e}',
+                    'otcost_diff': f'{np.mean(all_otcost_diff):.6e}',
+                    'tv_sparse': f'{np.mean(all_tv_sparse):.6e}',
+                    'last_metric': current_metric_name
+                },
+                refresh=False
+            )
+
+
+    # Convert to numpy arrays for statistics (TOT)
+    all_mae_sparse       = np.array(all_mae_sparse)
+    all_mape_sparse      = np.array(all_mape_sparse)
+    all_hellinger_sparse = np.array(all_hellinger_sparse)
+    all_otcost_diff      = np.array(all_otcost_diff)
+    all_tv_sparse        = np.array(all_tv_sparse)
+    
+    # Convert to numpy arrays for statistics (NOT)
+    all_mae_sparse_not       = np.array(results_not['mae'])
+    all_mape_sparse_not      = np.array(results_not['mape'])
+    all_hellinger_sparse_not = np.array(results_not['hellinger'])
+    all_otcost_diff_not      = np.array(results_not['otcost_diff'])
+    all_tv_sparse_not        = np.array(results_not['tv'])
+
+    # Save TOT results to a numpy file
+    np.savez(
+        os.path.join(model_base_path, f"eval_all_testset_1d_{current_metric_name}_results_tot.npz"),
+        all_mae_sparse=all_mae_sparse,
+        all_mape_sparse=all_mape_sparse,
+        all_hellinger_sparse=all_hellinger_sparse,
+        all_otcost_diff=all_otcost_diff,
+        all_tv_sparse=all_tv_sparse,
+        results_by_metric=results_by_metric
+    )
+    
+    # Save NOT results to a numpy file
+    np.savez(
+        os.path.join(model_base_path, f"eval_all_testset_1d_{current_metric_name}_results_not.npz"),
+        all_mae_sparse=all_mae_sparse_not,
+        all_mape_sparse=all_mape_sparse_not,
+        all_hellinger_sparse=all_hellinger_sparse_not,
+        all_otcost_diff=all_otcost_diff_not,
+        all_tv_sparse=all_tv_sparse_not,
+        results_by_metric=results_by_metric_not
+    )
 
     # Print statistics
     logger.info("\n" + "="*80)
-    logger.info("INFERENCE METRICS SUMMARY")
+    logger.info("INFERENCE METRICS SUMMARY (OVERALL)")
     logger.info("="*80)
     logger.info(f"Number of batches evaluated: {len(all_mae_sparse)}")
     logger.info("")
@@ -411,11 +701,37 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     logger.info(f"  Std:    {all_otcost_diff.std():.6e}")
     logger.info("="*80 + "\n")
 
+    # Print results per metric
+    if cost_type == 'semivariable':
+        logger.info("\n" + "="*80)
+        logger.info("INFERENCE METRICS SUMMARY (PER METRIC)")
+        logger.info("="*80)
+        
+        for m in sorted(list(seen_metrics)):
+            metrics_dict = results_by_metric[m]
+            count = metrics_dict['count']
+            if count == 0: continue
+            
+            mae = np.array(metrics_dict['mae'])
+            mape = np.array(metrics_dict['mape'])
+            hellinger = np.array(metrics_dict['hellinger'])
+            tv = np.array(metrics_dict['tv'])
+            ot_diff = np.array(metrics_dict['otcost_diff'])
+            
+            logger.info(f"Metric: {m} (count={count})")
+            logger.info(f"  MAE:        Mean={mae.mean():.6e}, Std={mae.std():.6e}")
+            logger.info(f"  MAPE:       Mean={mape.mean():.6e}, Std={mape.std():.6e}")
+            logger.info(f"  Hellinger:  Mean={hellinger.mean():.6e}, Std={hellinger.std():.6e}")
+            logger.info(f"  TV:         Mean={tv.mean():.6e}, Std={tv.std():.6e}")
+            logger.info(f"  OTDiff:     Mean={ot_diff.mean():.6e}, Std={ot_diff.std():.6e}")
+            logger.info("-" * 40)
+
     # Prepare summary table data
     table_data = []
     for r in all_results:
         table_data.append([
             r['batch_idx'],
+            r.get('metric', 'N/A'),
             f"{r['mae_sparse']:.3e}",
             f"{r['mape_sparse']:.3e}",
             f"{r['hellinger_sparse']:.3e}",
@@ -423,7 +739,8 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
             f"{r['otcost_diff']:.3e}"
         ])
 
-    headers = ['Batch', 'MAE (sparse)', 'MAPE (sparse)', 'Hellinger (sparse)', 'TV (sparse)', 'OT Cost Diff']
+    headers = ['Batch', 'Metric', 'MAE', 'MAPE', 'Hellinger', 'TV', 'OT Cost Diff']
+
     
     # Print summary table to terminal
     logger.info("\n" + "="*80)
@@ -432,9 +749,35 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     table_str_terminal = tabulate(table_data, headers=headers, tablefmt='grid', floatfmt=".3e")
     logger.info("\n" + table_str_terminal)
     
-    # Create Jupyter notebook with results
+    # # Create Jupyter notebook with results (OVERALL)
+    if cost_type == 'fixed':
+        create_analysis_notebook(
+            model_base_path, "eval_all_testset.ipynb", cfg, n_bins, len(all_results),
+            all_mae_sparse, all_mape_sparse, all_hellinger_sparse, all_tv_sparse, all_otcost_diff,
+            all_figures
+        )
+
+    # Create separate notebooks per metric for semivariable cost
+    if cost_type == 'semivariable':
+        for m, metrics_dict in results_by_metric.items():
+            if metrics_dict['count'] > 0:
+                # Filter figures for this metric
+                metric_figures = [f for f in all_figures if f.get('metric') == m]
+                
+                create_analysis_notebook(
+                    model_base_path, f"eval_all_testset_1d_{m}.ipynb", cfg, n_bins, metrics_dict['count'],
+                    np.array(metrics_dict['mae']), np.array(metrics_dict['mape']), 
+                    np.array(metrics_dict['hellinger']), np.array(metrics_dict['tv']), 
+                    np.array(metrics_dict['otcost_diff']),
+                    metric_figures
+                )
+
+
+def create_analysis_notebook(model_base_path, filename, cfg, n_bins, num_batches,
+                           mae_data, mape_data, hellinger_data, tv_data, otcost_data,
+                           figures_data):
     logger.info("\n" + "="*80)
-    logger.info("Creating Jupyter notebook with results")
+    logger.info(f"Creating Jupyter notebook: {filename}")
     logger.info("="*80)
     
     nb = new_notebook()
@@ -444,7 +787,7 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     cells.append(new_markdown_cell(
         f"# Transformers for Optimal Transport (TOT): Test Set Results\n\n"
         f"**Model:** {model_base_path}\n\n"
-        f"**Total batches evaluated:** {len(all_results)}\n\n"
+        f"**Total batches evaluated:** {num_batches}\n\n"
         f"**Dataset:** {cfg.data.hf_dataset}\n\n"
         f"**Support size (n_bins):** {n_bins}"
     ))
@@ -453,39 +796,39 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     stats_md = f"""## Summary Statistics
 
 ### MAE (sparse)
-- **Mean:** {all_mae_sparse.mean():.6e}
-- **Median:** {np.median(all_mae_sparse):.6e}
-- **Min:** {all_mae_sparse.min():.6e}
-- **Max:** {all_mae_sparse.max():.6e}
-- **Std:** {all_mae_sparse.std():.6e}
+- **Mean:** {mae_data.mean():.6e}
+- **Median:** {np.median(mae_data):.6e}
+- **Min:** {mae_data.min():.6e}
+- **Max:** {mae_data.max():.6e}
+- **Std:** {mae_data.std():.6e}
 
 ### MAPE (sparse)
-- **Mean:** {all_mape_sparse.mean():.6e}
-- **Median:** {np.median(all_mape_sparse):.6e}
-- **Min:** {all_mape_sparse.min():.6e}
-- **Max:** {all_mape_sparse.max():.6e}
-- **Std:** {all_mape_sparse.std():.6e}
+- **Mean:** {mape_data.mean():.6e}
+- **Median:** {np.median(mape_data):.6e}
+- **Min:** {mape_data.min():.6e}
+- **Max:** {mape_data.max():.6e}
+- **Std:** {mape_data.std():.6e}
 
 ### Hellinger (sparse)
-- **Mean:** {all_hellinger_sparse.mean():.6e}
-- **Median:** {np.median(all_hellinger_sparse):.6e}
-- **Min:** {all_hellinger_sparse.min():.6e}
-- **Max:** {all_hellinger_sparse.max():.6e}
-- **Std:** {all_hellinger_sparse.std():.6e}
+- **Mean:** {hellinger_data.mean():.6e}
+- **Median:** {np.median(hellinger_data):.6e}
+- **Min:** {hellinger_data.min():.6e}
+- **Max:** {hellinger_data.max():.6e}
+- **Std:** {hellinger_data.std():.6e}
 
 ### TV (sparse)
-- **Mean:** {all_tv_sparse.mean():.6e}
-- **Median:** {np.median(all_tv_sparse):.6e}
-- **Min:** {all_tv_sparse.min():.6e}
-- **Max:** {all_tv_sparse.max():.6e}
-- **Std:** {all_tv_sparse.std():.6e}
+- **Mean:** {tv_data.mean():.6e}
+- **Median:** {np.median(tv_data):.6e}
+- **Min:** {tv_data.min():.6e}
+- **Max:** {tv_data.max():.6e}
+- **Std:** {tv_data.std():.6e}
 
 ### OT Cost Difference
-- **Mean:** {all_otcost_diff.mean():.6e}
-- **Median:** {np.median(all_otcost_diff):.6e}
-- **Min:** {all_otcost_diff.min():.6e}
-- **Max:** {all_otcost_diff.max():.6e}
-- **Std:** {all_otcost_diff.std():.6e}
+- **Mean:** {otcost_data.mean():.6e}
+- **Median:** {np.median(otcost_data):.6e}
+- **Min:** {otcost_data.min():.6e}
+- **Max:** {otcost_data.max():.6e}
+- **Std:** {otcost_data.std():.6e}
 """
     cells.append(new_markdown_cell(stats_md))
 
@@ -496,7 +839,7 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     fig_box, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(14, 5), dpi=120)
     
     # Box plot for MAE (sparse)
-    bp1 = ax1.boxplot(all_mae_sparse, vert=True, patch_artist=True, 
+    bp1 = ax1.boxplot(mae_data, vert=True, patch_artist=True, 
                      boxprops=dict(facecolor='lightblue', alpha=0.7),
                      medianprops=dict(color='red', linewidth=2),
                      whiskerprops=dict(color='black', linewidth=1.5),
@@ -507,16 +850,16 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     #ax1.set_yscale('log')  # Use log scale for better visualization
     
     # Add statistics text
-    stats_text_mae = f'Mean: {all_mae_sparse.mean():.3e}\n'
-    stats_text_mae += f'Median: {np.median(all_mae_sparse):.3e}\n'
-    stats_text_mae += f'Min: {all_mae_sparse.min():.3e}\n'
-    stats_text_mae += f'Max: {all_mae_sparse.max():.3e}'
+    stats_text_mae = f'Mean: {mae_data.mean():.3e}\n'
+    stats_text_mae += f'Median: {np.median(mae_data):.3e}\n'
+    stats_text_mae += f'Min: {mae_data.min():.3e}\n'
+    stats_text_mae += f'Max: {mae_data.max():.3e}'
     ax1.text(0.98, 0.98, stats_text_mae, transform=ax1.transAxes,
              fontsize=10, verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
     # Box plot for MAPE (sparse)
-    bp2 = ax2.boxplot(all_mape_sparse, vert=True, patch_artist=True,
+    bp2 = ax2.boxplot(mape_data, vert=True, patch_artist=True,
                      boxprops=dict(facecolor='lightcoral', alpha=0.7),
                      medianprops=dict(color='darkred', linewidth=2),
                      whiskerprops=dict(color='black', linewidth=1.5),
@@ -527,16 +870,16 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     #ax2.set_yscale('log')  # Use log scale for better visualization
     
     # Add statistics text
-    stats_text_mape = f'Mean: {all_mape_sparse.mean():.3e}\n'
-    stats_text_mape += f'Median: {np.median(all_mape_sparse):.3e}\n'
-    stats_text_mape += f'Min: {all_mape_sparse.min():.3e}\n'
-    stats_text_mape += f'Max: {all_mape_sparse.max():.3e}'
+    stats_text_mape = f'Mean: {mape_data.mean():.3e}\n'
+    stats_text_mape += f'Median: {np.median(mape_data):.3e}\n'
+    stats_text_mape += f'Min: {mape_data.min():.3e}\n'
+    stats_text_mape += f'Max: {mape_data.max():.3e}'
     ax2.text(0.98, 0.98, stats_text_mape, transform=ax2.transAxes,
              fontsize=10, verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
     # Box plot for Hellinger (sparse)
-    bp3 = ax3.boxplot(all_hellinger_sparse, vert=True, patch_artist=True,
+    bp3 = ax3.boxplot(hellinger_data, vert=True, patch_artist=True,
                      boxprops=dict(facecolor='lightgreen', alpha=0.7),
                      medianprops=dict(color='darkgreen', linewidth=2),
                      whiskerprops=dict(color='black', linewidth=1.5),
@@ -547,16 +890,16 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     #ax3.set_yscale('log')  # Use log scale for better visualization
     
     # Add statistics text
-    stats_text_hellinger = f'Mean: {all_hellinger_sparse.mean():.3e}\n'
-    stats_text_hellinger += f'Median: {np.median(all_hellinger_sparse):.3e}\n'
-    stats_text_hellinger += f'Min: {all_hellinger_sparse.min():.3e}\n'
-    stats_text_hellinger += f'Max: {all_hellinger_sparse.max():.3e}'
+    stats_text_hellinger = f'Mean: {hellinger_data.mean():.3e}\n'
+    stats_text_hellinger += f'Median: {np.median(hellinger_data):.3e}\n'
+    stats_text_hellinger += f'Min: {hellinger_data.min():.3e}\n'
+    stats_text_hellinger += f'Max: {hellinger_data.max():.3e}'
     ax3.text(0.98, 0.98, stats_text_hellinger, transform=ax3.transAxes,
              fontsize=10, verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
 
     # Box plot for TV (sparse)
-    bp4 = ax4.boxplot(all_tv_sparse, vert=True, patch_artist=True,
+    bp4 = ax4.boxplot(tv_data, vert=True, patch_artist=True,
                      boxprops=dict(facecolor='lightgreen', alpha=0.7),
                      medianprops=dict(color='darkgreen', linewidth=2),
                      whiskerprops=dict(color='black', linewidth=1.5),
@@ -567,10 +910,10 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     #ax4.set_yscale('log')  # Use log scale for better visualization
     
     # Add statistics text
-    stats_text_tv  = f'Mean: {all_tv_sparse.mean():.3e}\n'
-    stats_text_tv += f'Median: {np.median(all_tv_sparse):.3e}\n'
-    stats_text_tv += f'Min: {all_tv_sparse.min():.3e}\n'
-    stats_text_tv += f'Max: {all_tv_sparse.max():.3e}'
+    stats_text_tv  = f'Mean: {tv_data.mean():.3e}\n'
+    stats_text_tv += f'Median: {np.median(tv_data):.3e}\n'
+    stats_text_tv += f'Min: {tv_data.min():.3e}\n'
+    stats_text_tv += f'Max: {tv_data.max():.3e}'
     ax4.text(0.98, 0.98, stats_text_tv, transform=ax4.transAxes,
              fontsize=10, verticalalignment='top', horizontalalignment='right',
              bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
@@ -602,11 +945,12 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     # cells.append(new_markdown_cell(table_str_notebook))
 
     # Add individual visualizations
-    cells.append(new_markdown_cell(f"## First {fig_counter_max} Individual Visualizations"))
+    cells.append(new_markdown_cell(f"## Individual Visualizations (First {len(figures_data)})"))
 
-    for fig_data in all_figures:
+    for fig_data in figures_data:
         # Add markdown header for this batch
-        cells.append(new_markdown_cell(f"### Batch {fig_data['batch_idx']}"))
+        metric_str = f" - {fig_data['metric']}" if 'metric' in fig_data else ""
+        cells.append(new_markdown_cell(f"### Batch {fig_data['batch_idx']}{metric_str}"))
         
         # Create an empty code cell with the figure as output (no code visible)
         cell = new_code_cell("")
@@ -626,7 +970,7 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     
     # Save notebook
     os.makedirs(model_base_path, exist_ok=True)
-    notebook_path = os.path.join(model_base_path, 'eval_all_testset.ipynb')
+    notebook_path = os.path.join(model_base_path, filename)
     
     with open(notebook_path, 'w') as f:
         nbformat.write(nb, f)
@@ -1110,7 +1454,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                     print("calling neural ot routine")
                     #_, ot_plan_not_dense = NOT_toy_1D_cost_weak.main_routine(X_sampler, Y_sampler, n_bins)
                     start_time = time.time()
-                    _, ot_plan_not_dense = NOT_toy_1D_cost_strong.main_routine(X_sampler, Y_sampler, n_bins, rng, metric)
+                    _, ot_plan_not_dense = NOT_toy_1D_cost_strong.main_routine(X_sampler, Y_sampler, n_bins, rng, metric, max_steps=not_max_steps, verbose=False)
                     ot_plan_not_sparse = sparse.coo_matrix(
                         ot_plan_not_dense,
                         shape=otplan_solve_sparse.shape

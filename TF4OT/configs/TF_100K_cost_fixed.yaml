@@ -12,22 +12,26 @@ defaults:
 
 # Override specific parameters
 data:
-  #1D
-  hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_euclidean_bins30"
+  #1D-30bins
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_euclidean_bins30"
   #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins30"
   #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_cityblock_bins30"
   #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_canberra_bins30"
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_chebyshev_bins30"
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_minkowski_bins30"
+  #1D-100bins
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins100"
   #2D
-  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_dim2_bins36"
+  hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_sqeuclidean_dim2_bins36"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
-    size_n:                100_000
-    size_s:                '100K'
-    support_size:          30
-    input_total_dim:       61      # row-wise -> 2*support_size+1
+    size_n:                500_000
+    size_s:                '500K'
+    support_size:          36
+    input_total_dim:       73      # row-wise -> 2*support_size+1
     input_cost_type:       "fixed" # fixed, variable, semivariable
-    input_cost_metric:     "euclidean" # only for "fixed" and "variable" costs
+    input_cost_metric:     "sqeuclidean" # only for "fixed" and "variable" costs 
     input_cost_matrix_dim: 0       # support_size*support_size
     row_wise:              true
   loading:
@@ -42,7 +46,7 @@ training:
   num_epochs:            50
   #batch_size_per_device: 3712   # tiny model
   #batch_size_per_device: 3712   # small model
-  batch_size_per_device: 192    # medium model
+  batch_size_per_device: 256    # medium model
   #batch_size_per_device: 192      # large model
 
   learning_rate:         1e-6
@@ -73,4 +77,5 @@ inference:
   testset_size: 1_000
   test_over_testset:      true       # Set to true to test all testset examples
   test_over_custom_pairs: true       # Set to true to run distribution pair tests
-  test_neural_ot:         true       # Set to true to run neural OT tests
+  test_neural_ot:         true       # Set to true to run neural OT tests. It runs only 10% of the testset_size
+  neural_ot_max_steps:    2500       # Original NeuralOT max iters: 5001

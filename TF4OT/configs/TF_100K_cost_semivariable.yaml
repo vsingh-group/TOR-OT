@@ -4,7 +4,7 @@
 # Override the defaults
 defaults:
   - data:       default
-  - model:      medium
+  - model:      large
   - training:   default
   - tokenizer:  default
   - logging:    default
@@ -13,16 +13,16 @@ defaults:
 # Override specific parameters
 data:
   #metrics = ['euclidean', 'sqeuclidean', 'cityblock', 'chebyshev', 'canberra', 'minkowski']
-  hf_dataset:     "ivanjaenm/otdata_600K_rowwise_costtype_all6_bin30"
+  hf_dataset:     "ivanjaenm/otdata_1.2M_rowwise_costtype_all6_bin30"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
-    size_n:                600_000
-    size_s:                '600K'
+    size_n:                1_200_000
+    size_s:                '1.2M'
     support_size:          30
     input_total_dim:       61             # row-wise -> 2*support_size+1 
     input_cost_type:       "semivariable" # fixed, variable, semivariable
-    input_cost_metric:     "minkowski"    # if not specified, it will use all metrics - one by one
+    input_cost_metric:         # if not specified, it will use all metrics - one by one
     input_cost_matrix_dim: 6              # variable: support_size*support_size or semivariable: number of metrics used
     row_wise:              true
   loading:
@@ -36,7 +36,8 @@ model:
 training:
   num_epochs:            25
   #batch_size_per_device: 3072 # tiny model
-  batch_size_per_device: 128 # medium model, d=30
+  #batch_size_per_device: 128 # medium model, d=30
+  batch_size_per_device: 128 # large model, d=30
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1
@@ -46,7 +47,7 @@ training:
 # Main tokenizer used during training/inference
 tokenizer:
   DigitTokenizer:
-    decimal_precision: 4
+    decimal_precision: 6
     vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']
   # IEEEFloatTokenizer:
   #   base: 10
@@ -62,5 +63,5 @@ inference:
   batch_size:   1
   testset_size: 1_000
   test_over_testset:      true       # Set to true to test all testset examples
-  test_over_custom_pairs: true       # Set to true to run distribution pair tests
-  test_neural_ot:         true       # Set to true to run neural OT tests
+  test_over_custom_pairs: false       # Set to true to run distribution pair tests
+  test_neural_ot:         false       # Set to true to run neural OT tests

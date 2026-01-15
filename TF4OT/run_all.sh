@@ -42,3 +42,11 @@ python3 -m TF4OT.run_inference --config-name TF_100K_cost_fixed     > $LOGDIR/ev
 
 #python3 TF4OT/evals/NOT/NOT_toy_1D_cost_weak.py
 python3 TF4OT/evals/NOT/NOT_toy_2D_cost_strong.py
+
+# copy results from chtc condor
+results_path="model_dim768_context512_tflayers24_tfheads16_num_prefix1_dropout0_flashTrue_data100K_rowwise_costfixed_prec4_bins30_DigitTokenizer_epochs50_batch192_minkowski"
+rsync -ah --progress $results_path ivan@10.131.151.11:/home/ivan/repos/TF4OT/experiments/cost_fixed/
+
+results_path="/staging/moros2/experiments/model_dim768_context512_tflayers24_tfheads16_num_prefix1_dropout0_flashTrue_data100K_rowwise_costfixed_prec4_bins30_DigitTokenizer_epochs50_batch192_minkowski"
+ssh $results_path ivan@ip:/home/ivan/repos/TF4OT/experiments/cost_fixed/
+scp -r /staging/moros2/experiments/model_dim768_context512_tflayers24_tfheads16_num_prefix1_dropout0_flashTrue_data100K_rowwise_costfixed_prec4_bins30_DigitTokenizer_epochs50_batch192_minkowski ivan@10.131.151.11:/home/ivan/repos/TF4OT/experiments/cost_fixed/

@@ -44,11 +44,13 @@ def canberra_cost (X, Y):
     canberra = (num / den).sum(dim=-1)      # sum over feature dim
     return canberra
 
-def hamming_cost (X, Y):
-    C = ot.dist(X, Y, metric="hamming", use_tensor=True)
-    return (X != Y).float().sum(dim=-1)
+def chebyshev_cost (X, Y):
+    return torch.linalg.vector_norm(X-Y, dim=-1, ord=np.inf).flatten(start_dim=1)
 
-def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
+def minkowski_cost (X, Y, p=3):
+    return torch.linalg.vector_norm(X-Y, dim=-1, ord=p).flatten(start_dim=1)
+
+def main_routine(X_sampler, Y_sampler, num_bins, rng, metric, max_steps=2501, verbose=False):
     
     #DEVICE_IDS = [2,1,0]
     if metric == "sqeuclidean":
@@ -59,8 +61,10 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
         COST = cityblock_cost
     elif metric == "canberra":
         COST = canberra_cost
-    elif metric == "hamming":
-        COST = hamming_cost
+    elif metric == "chebyshev":
+        COST = chebyshev_cost
+    elif metric == "minkowski":
+        COST = minkowski_cost
     else:
         raise ValueError("Unknown metric: {}".format(metric))
 
@@ -72,10 +76,9 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
     
     BATCH_SIZE = 64
     Z_SIZE = 4
-
+    
     #MAX_STEPS = 5001
-    MAX_STEPS = 2501
-    #MAX_STEPS = 251
+    MAX_STEPS = max_steps
     PLOT_INTERVAL = MAX_STEPS-1
     SEED = 0x000000
 
@@ -124,7 +127,11 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
     T_opt = torch.optim.Adam(T.parameters(), lr=T_LR, weight_decay=1e-10)
     f_opt = torch.optim.Adam(f.parameters(), lr=f_LR, weight_decay=1e-10)
     
-    for step in tqdm(range(MAX_STEPS)):
+    iterator = range(MAX_STEPS)
+    if verbose:
+        iterator = tqdm(iterator)
+
+    for step in iterator:
         # T optimization
         unfreeze(T); freeze(f)
         for t_iter in range(T_ITERS):
@@ -136,12 +143,9 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
             T_XZ = T(
                 XZ.flatten(start_dim=0, end_dim=1)
             ).permute(1, 0).reshape(DIM, -1, Z_SIZE).permute(1, 2, 0)
-            # STRONG COST:
-            #T_loss = F.mse_loss(X, T_XZ).mean() - f(T_XZ.flatten(start_dim=0, end_dim=1)).mean()
+            
             T_loss = COST(X, T_XZ).mean() - f(T_XZ.flatten(start_dim=0, end_dim=1)).mean()
 
-            # WEAK COST:
-            #T_loss = F.mse_loss(X, T_XZ).mean() - T_XZ.var(dim=1).mean() -\
             #f(T_XZ.flatten(start_dim=0, end_dim=1)).mean() 
             T_loss.backward(); T_opt.step()
 
@@ -176,7 +180,8 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
 
         # gc.collect()
         # torch.cuda.empty_cache()
-    print("1d neural ot run completed")
+    if verbose:
+        print("1d neural ot run completed")
     ot_plan_T, ot_plan_hist = plot_1D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1_000_000, num_bins=num_bins, rng=rng)
 
     #print("Plotting solutions on DOT (non-unique!)")

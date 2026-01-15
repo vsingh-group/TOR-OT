@@ -44,11 +44,13 @@ def canberra_cost (X, Y):
     canberra = (num / den).sum(dim=-1)      # sum over feature dim
     return canberra
 
-def hamming_cost (X, Y):
-    C = ot.dist(X, Y, metric="hamming", use_tensor=True)
-    return (X != Y).float().sum(dim=-1)
+def chebyshev_cost (X, Y):
+    return torch.linalg.vector_norm(X-Y, dim=-1, ord=np.inf).flatten(start_dim=1)
 
-def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
+def minkowski_cost (X, Y, p=3):
+    return torch.linalg.vector_norm(X-Y, dim=-1, ord=p).flatten(start_dim=1)
+
+def main_routine(X_sampler, Y_sampler, num_bins, rng, metric, max_steps=2501, verbose=False):
 
     #DEVICE_IDS = [2]
     if metric == "sqeuclidean":
@@ -59,8 +61,10 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
         COST = cityblock_cost
     elif metric == "canberra":
         COST = canberra_cost
-    elif metric == "hamming":
-        COST = hamming_cost
+    elif metric == "chebyshev":
+        COST = chebyshev_cost
+    elif metric == "minkowski":
+        COST = minkowski_cost
     else:
         raise ValueError("Unknown metric: {}".format(metric))
 
@@ -74,8 +78,8 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
     Z_SIZE = 4
 
     #PLOT_INTERVAL = 200
-    #MAX_STEPS = 10_001
-    MAX_STEPS = 5_001
+    #MAX_STEPS = 5_001
+    MAX_STEPS = max_steps
     SEED = 0x000000
 
     DIM = 2
@@ -180,7 +184,8 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric):
 
         # gc.collect()
         # torch.cuda.empty_cache()
-    print("2d neural ot run completed")
+    if verbose:
+        print("2d neural ot run completed")
     plan_matrix = plot_generated_2D(X_sampler, Y_sampler, T, ZD, Z_STD, num_samples=1_000_000, num_bins=num_bins)
     return plan_matrix
 
