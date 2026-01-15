@@ -9,7 +9,9 @@ get_quotas /staging/$username
 condor_submit -i experiment=dataset-interactive  condor/scripts/cpu-job.sub
 condor_submit -i experiment=TF_100K_cost_semivariable condor/scripts/gpu-job.sub
 
+
 # Run a single experiment
-#condor_submit experiment=dataset  condor/scripts/cpu-job.sub
-condor_submit experiment=TF_100K_cost_semivariable condor/scripts/gpu-job.sub
-condor_submit experiment=TF_100K_cost_fixed condor/scripts/gpu-job.sub
+condor_submit experiment=dataset  condor/scripts/cpu-job.sub
+condor_submit experiment=TF_100K_cost_variable      condor/scripts/gpu-job.sub
+condor_submit experiment=TF_100K_cost_semivariable  condor/scripts/gpu-job.sub
+condor_submit experiment=TF_100K_cost_fixed         condor/scripts/gpu-job.sub

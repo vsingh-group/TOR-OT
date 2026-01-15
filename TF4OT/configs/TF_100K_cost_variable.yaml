@@ -12,12 +12,12 @@ defaults:
 
 # Override specific parameters
 data:
-  hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_sqeuclidean_variable_bins10"
-  hf_cache_dir:   "/data/ivan/datasets/hfcache"
-  #hf_cache_dir:   "./home/moros2/hfcache"
+  hf_dataset:     "ivanjaenm/otdata_1M_rowwise_costtype_sqeuclidean_variable_bins10"
+  #hf_cache_dir:   "/data/ivan/datasets/hfcache"
+  hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
-    size_n:                500_000
-    size_s:                '500K'
+    size_n:                1_000_000
+    size_s:                '1M'
     support_size:          10
     input_total_dim:       21   # row-wise -> 2*support_size+1 
     input_cost_type:       "variable" # fixed, variable, semivariable
@@ -33,9 +33,9 @@ model:
   use_flash_attention: true
 
 training:
-  num_epochs:            25
+  num_epochs:            50
   #batch_size_per_device: 128 # medium model, d=30
-  batch_size_per_device: 192 # large model, bins=10
+  batch_size_per_device: 256 # large model, bins=10
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1
@@ -45,7 +45,7 @@ training:
 # Main tokenizer used during training/inference
 tokenizer:
   DigitTokenizer:
-    decimal_precision: 4
+    decimal_precision: 6
     vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']
   # IEEEFloatTokenizer:
   #   base: 10
