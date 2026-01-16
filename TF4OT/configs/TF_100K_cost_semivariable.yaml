@@ -4,7 +4,7 @@
 # Override the defaults
 defaults:
   - data:       default
-  - model:      large
+  - model:      medium
   - training:   default
   - tokenizer:  default
   - logging:    default
@@ -36,8 +36,8 @@ model:
 training:
   num_epochs:            25
   #batch_size_per_device: 3072 # tiny model
-  #batch_size_per_device: 128 # medium model, d=30
-  batch_size_per_device: 128 # large model, d=30
+  batch_size_per_device: 128 # medium model, d=30
+  #batch_size_per_device: 128 # large model, d=30
   learning_rate:         1e-6
   use_amp:               false
   grad_accumulation:     1
