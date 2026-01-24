@@ -20,14 +20,16 @@ data:
   #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_chebyshev_bins30"
   #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_minkowski_bins30"
   #1D-100bins
-  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_bins100"
+  #hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_sqeuclidean_bins100"
   #2D
-  hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_sqeuclidean_dim2_bins36"
+  #hf_dataset:     "ivanjaenm/otdata_500K_rowwise_costtype_sqeuclidean_dim2_bins36"
+  #hf_dataset:     "ivanjaenm/otdata_100K_rowwise_costtype_sqeuclidean_dim2_bins36"
+  hf_dataset:     "ivanjaenm/otdata_1.8M_rowwise_costtype_all6_dim2_bins36"
   hf_cache_dir:   "/data/ivan/datasets/hfcache"
   #hf_cache_dir:   "./home/moros2/hfcache"
   dataset:
-    size_n:                500_000
-    size_s:                '500K'
+    size_n:                1_800_000
+    size_s:                '1.8M'
     support_size:          36
     input_total_dim:       73      # row-wise -> 2*support_size+1
     input_cost_type:       "fixed" # fixed, variable, semivariable
@@ -43,10 +45,10 @@ model:
   use_flash_attention: true
  
 training:
-  num_epochs:            50
+  num_epochs:            10
   #batch_size_per_device: 3712   # tiny model
   #batch_size_per_device: 3712   # small model
-  batch_size_per_device: 256    # medium model
+  batch_size_per_device: 192    # medium model
   #batch_size_per_device: 192      # large model
 
   learning_rate:         1e-6
@@ -59,7 +61,7 @@ training:
 tokenizer:
   # option1: DigitTokenizer
   DigitTokenizer:
-    decimal_precision: 4
+    decimal_precision: 6
     vocabulary: ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ',', '.', '[', ']', ' ']
   # option2: IEEEFloatTokenizer
   # IEEEFloatTokenizer:

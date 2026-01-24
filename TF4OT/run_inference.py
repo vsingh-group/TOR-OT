@@ -1452,6 +1452,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 ot_plan_not_sparse = None
                 if cfg.inference.test_neural_ot:
                     print("calling neural ot routine")
+                    not_max_steps = cfg.inference.neural_ot_max_steps
                     #_, ot_plan_not_dense = NOT_toy_1D_cost_weak.main_routine(X_sampler, Y_sampler, n_bins)
                     start_time = time.time()
                     _, ot_plan_not_dense = NOT_toy_1D_cost_strong.main_routine(X_sampler, Y_sampler, n_bins, rng, metric, max_steps=not_max_steps, verbose=False)
