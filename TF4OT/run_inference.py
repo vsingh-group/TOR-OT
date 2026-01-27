@@ -222,6 +222,9 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     all_hellinger_sparse = []
     all_otcost_diff      = []
     all_tv_sparse        = []
+    all_row_violation    = []
+    all_col_violation    = []
+    all_max_violation    = []
     all_figures          = []
     all_results          = []
     
@@ -407,6 +410,14 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                 otcost_pred   = (ot_pred_dense.cpu().numpy() * C.cpu().numpy()).sum().item()
                 otcost_diff   = abs(otcost_pred - otcost_gt)
 
+                # Calculate Constraint Violations for TOT
+                # Need source and target marginals.
+                # source_hist, target_hist (already extracted above) are tensors
+                metrics_viol = utils.compute_constraint_violations(ot_pred_sparse, source_hist, target_hist)
+                row_violation = metrics_viol['row_violation']
+                col_violation = metrics_viol['col_violation']
+                max_violation = metrics_viol['max_violation']
+
                 # Calculate metrics for NOT
                 if run_neural_ot:
                     mae_not  = utils.sparse_mean_abs_error(ot_target_sparse, ot_pred_sparse_not)
@@ -416,13 +427,16 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                     
                     otcost_pred_not = (ot_pred_dense_not.cpu().numpy() * C.cpu().numpy()).sum().item()
                     otcost_diff_not = abs(otcost_pred_not - otcost_gt)
-
+                    
                 # Collect metrics for TOT
                 all_mae_sparse.append(mae_sparse)
                 all_mape_sparse.append(mape_sparse)
                 all_hellinger_sparse.append(hellinger_sparse)
                 all_otcost_diff.append(otcost_diff)
                 all_tv_sparse.append(tv_sparse)
+                all_row_violation.append(row_violation)
+                all_col_violation.append(col_violation)
+                all_max_violation.append(max_violation)
                 
                 # Collect metrics for NOT
                 if run_neural_ot:
@@ -458,6 +472,10 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                     'hellinger_sparse': hellinger_sparse,
                     'otcost_diff': otcost_diff,
                     'tv_sparse': tv_sparse,
+                    'tv_sparse': tv_sparse,
+                    'row_violation': row_violation,
+                    'col_violation': col_violation,
+                    'max_violation': max_violation,
                     'metric': current_metric_name
                 }
                 if run_neural_ot:
@@ -544,13 +562,13 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
                     plt.colorbar(im2, ax=axarr[2], fraction=0.046, pad=0.04)
 
                     # --- Ground Truth OT Plan ---
-                    im3 = axarr[3].imshow(ot_target_dense, cmap='Greens', origin='lower', aspect="auto", vmin=vmin, vmax=vmax)
+                    im3 = axarr[3].imshow(ot_target_dense, cmap='Blues', origin='lower', aspect="auto", vmin=vmin, vmax=vmax)
                     axarr[3].set_xlabel("Target bins")
                     axarr[3].set_ylabel("Source bins")
                     plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
 
                     # --- Predicted OT Plan ---
-                    im4 = axarr[4].imshow(ot_pred_dense.cpu().numpy(), cmap='Reds', origin='lower', aspect="auto", vmin=vmin, vmax=vmax)
+                    im4 = axarr[4].imshow(ot_pred_dense.cpu().numpy(), cmap='Greens', origin='lower', aspect="auto", vmin=vmin, vmax=vmax)
                     axarr[4].set_xlabel("Target bins")
                     axarr[4].set_ylabel("Source bins")
                     plt.colorbar(im4, ax=axarr[4], fraction=0.046, pad=0.04)
@@ -624,6 +642,9 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     all_hellinger_sparse = np.array(all_hellinger_sparse)
     all_otcost_diff      = np.array(all_otcost_diff)
     all_tv_sparse        = np.array(all_tv_sparse)
+    all_row_violation    = np.array(all_row_violation)
+    all_col_violation    = np.array(all_col_violation)
+    all_max_violation    = np.array(all_max_violation)
     
     # Convert to numpy arrays for statistics (NOT)
     all_mae_sparse_not       = np.array(results_not['mae'])
@@ -640,6 +661,9 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
         all_hellinger_sparse=all_hellinger_sparse,
         all_otcost_diff=all_otcost_diff,
         all_tv_sparse=all_tv_sparse,
+        all_row_violation=all_row_violation,
+        all_col_violation=all_col_violation,
+        all_max_violation=all_max_violation,
         results_by_metric=results_by_metric
     )
     
@@ -1436,6 +1460,10 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 otcost_diff_tot   = abs(otcost_pred - otcost_gt)
                 # Total Variation
                 tv_sparse_tot = utils.sparse_total_variation(otplan_solve_sparse, ot_pred_sparse)
+                
+                # Calculate Constraint Violations
+                # source and target are numpy arrays (from utils.hist_from_samples)
+                metrics_viol_tot = utils.compute_constraint_violations(ot_pred_sparse, source, target)
 
                 all_results_tot.append({
                     'source':           X_sampler.name,
@@ -1445,6 +1473,9 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                     'mape_sparse':      mape_sparse_tot,
                     'hellinger_sparse': hellinger_sparse_tot,
                     'tv_sparse':        tv_sparse_tot,
+                    'row_violation':    metrics_viol_tot['row_violation'],
+                    'col_violation':    metrics_viol_tot['col_violation'],
+                    'max_violation':    metrics_viol_tot['max_violation'],
                     'run_time':         run_time_tot
                 })
                 ####################################################################################################################################  NEURAL OT (NOT)
@@ -1548,7 +1579,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 plt.colorbar(im3, ax=axarr[3], fraction=0.046, pad=0.04)
 
                 # --- Our Model Prediction ---
-                im4 = axarr[4].imshow(ot_pred_dense, cmap='Reds', vmin=vmin, vmax=vmax,
+                im4 = axarr[4].imshow(ot_pred_dense, cmap='Greens', vmin=vmin, vmax=vmax,
                                     origin='lower', aspect="auto")
                 axarr[4].set_xlabel("Target bins")
                 axarr[4].set_ylabel("Source bins")
@@ -1625,6 +1656,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         mape_sparse_matrix      = np.zeros((n_rows, n_cols))
         hellinger_sparse_matrix = np.zeros((n_rows, n_cols))
         tv_sparse_matrix        = np.zeros((n_rows, n_cols))
+        max_violation_matrix    = np.zeros((n_rows, n_cols))
         run_time_matrix         = np.zeros((n_rows, n_cols))
 
         # Fill matrices from all_results (results are stored in row-major order)
@@ -1636,6 +1668,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
             mape_sparse_matrix[i, j]       = r['mape_sparse']
             hellinger_sparse_matrix[i, j]  = r['hellinger_sparse']
             tv_sparse_matrix[i, j]         = r['tv_sparse']
+            max_violation_matrix[i, j]     = r['max_violation']
             run_time_matrix[i, j]          = r['run_time']
 
         # Create OT Cost Diff table
@@ -1703,6 +1736,18 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
         tv_sparse_table_str = tabulate(tv_sparse_table_data, headers=tv_sparse_headers, tablefmt='grid', floatfmt=".3e")
         logger.info("\n" + tv_sparse_table_str)
 
+        # Create Max Violation table
+        logger.info("\n" + "="*80)
+        logger.info("MAX VIOLATION")
+        logger.info("="*80)
+        max_violation_table_data = []
+        for i, row_name in enumerate(row_names):
+            row = [row_name] + [f"{max_violation_matrix[i, j]:.3e}" for j in range(n_cols)]
+            max_violation_table_data.append(row)
+        max_violation_headers = ['Source \\ Target'] + col_names
+        max_violation_table_str = tabulate(max_violation_table_data, headers=max_violation_headers, tablefmt='grid', floatfmt=".3e")
+        logger.info("\n" + max_violation_table_str)
+
         # Create Run Time table
         logger.info("\n" + "="*80)
         logger.info("RUN TIME")
@@ -1727,10 +1772,11 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
                 f"{r['mape_sparse']:.3e}",
                 f"{r['hellinger_sparse']:.3e}",
                 f"{r['tv_sparse']:.3e}",    
+                f"{r['max_violation']:.3e}",
                 f"{r['run_time']:.3e}",
             ])
 
-        headers = ['Source', 'Target', 'OT Cost Diff', 'MAE (sparse)', 'MAPE (sparse)', 'Hellinger (sparse)', 'TV (sparse)', 'Run Time']
+        headers = ['Source', 'Target', 'OT Cost Diff', 'MAE (sparse)', 'MAPE (sparse)', 'Hellinger (sparse)', 'TV (sparse)', 'Max Violation', 'Run Time']
 
         # Print summary table to terminal
         logger.info("\n" + "="*80)
@@ -1751,6 +1797,7 @@ def eval_all_1d_distribution_pairs(cfg: DictConfig, pytorch_model=None, tokenize
             'MAPE (Sparse)': ([r['mape_sparse'] for r in all_results_tot], [r['mape_sparse'] for r in all_results_not]),
             'Hellinger (Sparse)': ([r['hellinger_sparse'] for r in all_results_tot], [r['hellinger_sparse'] for r in all_results_not]),
             'TV (Sparse)': ([r['tv_sparse'] for r in all_results_tot], [r['tv_sparse'] for r in all_results_not]),
+            'Max Violation': ([r['max_violation'] for r in all_results_tot], []),
             'Run Time (Seconds)': ([r['run_time'] for r in all_results_tot], [r['run_time'] for r in all_results_not])
         }
         num_boxplots = len(metrics_to_plot)

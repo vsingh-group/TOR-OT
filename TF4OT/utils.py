@@ -484,6 +484,60 @@ def sparse_total_variation(P: sparse.coo_matrix, Q: sparse.coo_matrix) -> float:
     diff = (P - Q).tocoo()
     return float(0.5 * np.abs(diff.data).sum(dtype=np.float64))
 
+def compute_constraint_violations(pred_plan_sparse, source_marg, target_marg):
+    """
+    Compute constraint violations for an OT plan.
+    
+    Args:
+        pred_plan_sparse: scipy.sparse.coo_matrix (N, N)
+        source_marg: np.ndarray (N,) or torch.Tensor
+        target_marg: np.ndarray (N,) or torch.Tensor
+        
+    Returns:
+        dict with keys: 'row_violation', 'col_violation', 'max_violation'
+    """
+    # Ensure marginals are numpy arrays (flattened)
+    if isinstance(source_marg, torch.Tensor):
+        source_marg = source_marg.detach().cpu().numpy().flatten()
+    else:
+        source_marg = np.asarray(source_marg).flatten()
+        
+    if isinstance(target_marg, torch.Tensor):
+        target_marg = target_marg.detach().cpu().numpy().flatten()
+    else:
+        target_marg = np.asarray(target_marg).flatten()
+    
+    # Calculate row and column sums of the predicted plan
+    # sum(axis=1) returns matrix of shape (N, 1), need flattening
+    row_sums = np.asarray(pred_plan_sparse.sum(axis=1)).flatten()
+    col_sums = np.asarray(pred_plan_sparse.sum(axis=0)).flatten()
+    
+    # Compute L1 norm of errors
+    # Error = || P 1 - a ||_1
+    row_err = np.abs(row_sums - source_marg).sum()
+    col_err = np.abs(col_sums - target_marg).sum()
+    
+    # Max violation (max absolute error in any row or column sum? 
+    # Or max of the total row/col errors? usually max of the L1 errors or L_inf error?
+    # User said: "max violation (constraint violation in colums and rows)" 
+    # Usually this implies L_infinity norm of the marginal difference vectors, 
+    # but the prompt says "max(row_err, col_err)" in my thought process? 
+    # Wait, the prompt said: "Report || pi 1 - a ||_1, || pi^T 1 - b ||_1, max violation"
+    # "max violation" is typically max(|row_sums - source| + |col_sums - target|)? 
+    # Or max( ||..||_inf )? 
+    # Let's compute the L_inf violation as well, which is often what "max violation" refers to in solvers (primal feasibility).
+    # But for a single scalar "max_violation", let's assume it means the maximum absolute deviation in any single marginal constraint.
+    
+    max_row_dev = np.abs(row_sums - source_marg).max()
+    max_col_dev = np.abs(col_sums - target_marg).max()
+    max_violation = max(max_row_dev, max_col_dev)
+    
+    return {
+        'row_violation': float(row_err),
+        'col_violation': float(col_err),
+        'max_violation': float(max_violation)
+    }
+
 def print_sparse_matrix(A):
     A = A.tocoo()
     for r, c, v in zip(A.row, A.col, A.data):
