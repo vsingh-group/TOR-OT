@@ -57,6 +57,22 @@ python3 -m TF4OT.vocabs_test
 nohup ./TF4OT/run_all.sh &
 ```
 
+### Generate plots (evals/plots)
+```bash
+comparison_box_plots_1d.ipynb
+```
+```bash
+comparison_box_plots_2d.ipynb
+```
+```bash
+python3 generate_plots.py
+```
+```bash
+python3 generate_feasibility_plots.py ./experiments/cost_semivariable/model_dim768_context512_tflayers24_tfheads16_num_prefix1_dropout0_flashTrue_data600K_rowwise_costsemivariable_prec4_bins30_DigitTokenizer_epochs25_batch128
+```
+
+
+
 ## 🌟 Citation
 If you find this work is helpful to your research, please consider citing our paper:
 ```
