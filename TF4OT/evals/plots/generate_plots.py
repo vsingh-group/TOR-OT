@@ -108,7 +108,7 @@ for metric in METRICS:
         print(f"Error loading {metric}: {e}")
 
 # Global Font Settings for larger ticks
-plt.rcParams.update({'font.size': 14, 'axes.labelsize': 16, 'xtick.labelsize': 14, 'ytick.labelsize': 14})
+plt.rcParams.update({'font.size': 14, 'axes.labelsize': 20, 'xtick.labelsize': 20, 'ytick.labelsize': 20})
 
 # -----------------------------\n
 # 2. Summary Improvement Plot (Vertical)\n
@@ -130,7 +130,7 @@ if summary_improvements:
 
     ax.axhline(0, color='black', linewidth=1)
     ax.set_ylabel('Mean Improvement (%)', fontsize=22)
-    ax.set_title('Average Improvement by Cost Metric (MAPE)', fontsize=18)
+    # ax.set_title('Average Improvement by Cost Metric (MAPE)', fontsize=18)
     ax.grid(axis='y', linestyle='--', alpha=0.7)
 
     ax.tick_params(axis='x', labelsize=22)
@@ -321,23 +321,24 @@ plt.close()
 
 
 # --- Plot 2: Linear Scale ---
-max_N = int(N_break_even * 4) 
+max_N = int(N_break_even * 7) 
 N_values_lin = np.linspace(100, max_N, 500)
 
 avg_time_tot_lin = (T_TRAIN_SEC / N_values_lin) + T_TOT_INFER_SEC
 avg_time_not_lin = np.full_like(N_values_lin, T_NOT_SEC)
 
-plt.figure(figsize=(8, 6))
-plt.plot(N_values_lin, avg_time_not_lin, label=f'Standard (NOT): {T_NOT_SEC}s/sample', linewidth=2, color='tab:orange', linestyle='--')
-plt.plot(N_values_lin, avg_time_tot_lin, label=f'Amortized (TOT): {T_TRAIN_HOURS}h train + {T_TOT_INFER_SEC}s/sample', linewidth=2, color='tab:blue')
-plt.plot(N_break_even, T_NOT_SEC, 'ko', label=f'Break-even: N $\\approx$ {int(N_break_even):,}')
+plt.figure(figsize=(10, 4))
+plt.plot(N_values_lin, avg_time_not_lin, label=f'NeuralOT', linewidth=4, color='darkred', linestyle='--')
+plt.plot(N_values_lin, avg_time_tot_lin, label=f'ToR-OT', linewidth=4, color='darkgreen')
+# plt.plot(N_break_even, T_NOT_SEC, 'ko', label=f'Break-even: N $\\approx$ {int(N_break_even):,}')
 
-plt.xlabel('Number of Samples (N)', fontsize=14)
-plt.ylabel('Average Time per Sample (Seconds)', fontsize=14)
-plt.title('Amortized Runtime Comparison (Linear Scale)', fontsize=16)
-plt.legend(fontsize=12)
+plt.xlabel('Number of Samples', fontsize=20)
+plt.ylabel('Amortized time (Sec)', fontsize=20)
+# plt.title('Amortized Runtime Comparison (Linear Scale)', fontsize=16)
+plt.legend(fontsize=20, loc='upper right', framealpha=1)
 plt.grid(True, which="both", ls="-", alpha=0.2)
 plt.grid(True, which="major", ls="-", alpha=0.5)
+
 plt.tight_layout()
 
 out_lin = "TF4OT/evals/plots/img/amortized_runtime_comparison_linear.png"
