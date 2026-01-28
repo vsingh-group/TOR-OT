@@ -5,6 +5,8 @@ import argparse
 import seaborn as sns
 import pandas as pd
 
+sns.set_context("notebook", font_scale=2.0)
+
 def plot_testset_analysis(data, output_dir):
     """Generates plots for the testset results."""
     print("Generating Testset Plots...")
@@ -22,8 +24,8 @@ def plot_testset_analysis(data, output_dir):
     plt.figure(figsize=(10, 6))
     sns.boxplot(data=df_melted, x='Metric', y='Violation', showfliers=False, palette='pastel')
     sns.stripplot(data=df_melted, x='Metric', y='Violation', color='black', alpha=0.1, jitter=True, size=2)
-    plt.title('Distribution of Feasibility Violations (Testset)', fontsize=14)
-    plt.ylabel('Violation Magnitude (L1 Error)')
+    plt.title('Distribution of Feasibility Violations (Testset)', fontsize=28)
+    plt.ylabel('Magnitude (Log Scale)')
     plt.yscale('log')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'testset_feasibility_boxplot.png'), dpi=300)
@@ -32,23 +34,44 @@ def plot_testset_analysis(data, output_dir):
     # 2. Violin Plot
     plt.figure(figsize=(10, 6))
     sns.violinplot(data=df_melted, x='Metric', y='Violation', palette='muted', inner='quartile')
-    plt.title('Density of Feasibility Violations (Testset)', fontsize=14)
-    plt.ylabel('Violation Magnitude')
+    plt.title('Density of Feasibility Violations (Testset)', fontsize=28)
+    plt.ylabel('Magnitude (Log Scale)')
     plt.yscale('log')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'testset_feasibility_violinplot.png'), dpi=300)
     plt.close()
 
     # 3. ECDF Plot
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(7, 5))
     sns.ecdfplot(data=df_melted, x='Violation', hue='Metric', linewidth=2)
-    plt.title('Cumulative Distribution of Violations (Testset)', fontsize=14)
-    plt.xlabel('Violation Magnitude')
+    plt.title('Cumulative Distribution of Violations (Testset)', fontsize=28)
+    plt.ylabel('Magnitude (Log Scale)')
     plt.ylabel('Proportion of Samples')
     plt.xscale('log')
     plt.grid(True, which="both", ls="-", alpha=0.2)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'testset_feasibility_ecdf.png'), dpi=300)
+    plt.close()
+
+    # 4. Row and Column Violation Boxplots (Single Plot)
+    plt.figure(figsize=(6, 6))
+    
+    # Prepare data for single plot
+    violation_data = {
+        'Rows': data['all_row_violation'],
+        'Columns': data['all_col_violation']
+    }
+    df_violations = pd.DataFrame(violation_data)
+    df_violations_melted = df_violations.melt(var_name='Violation Type', value_name='Magnitude')
+
+    sns.boxplot(data=df_violations_melted, x='Violation Type', y='Magnitude', palette=['tab:blue', 'tab:orange'], showfliers=False)
+    plt.title('Row vs Column Violations')
+    plt.ylabel('Magnitude (Log Scale)')
+    plt.yscale('log')
+    plt.grid(True, which="both", ls="-", alpha=0.2)
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(output_dir, 'testset_row_col_violation_single_plot.png'), dpi=300)
     plt.close()
 
 
@@ -66,7 +89,7 @@ def plot_pairs_analysis(data_list, output_dir):
     # 1. Max Violation Heatmap
     plt.figure(figsize=(12, 10))
     sns.heatmap(pivot_max, annot=True, fmt=".2e", cmap="Reds", linewidths=.5, cbar_kws={'label': 'Max Violation'})
-    plt.title('Max Constraint Violation by Distribution Pair', fontsize=16)
+    plt.title('Max Constraint Violation by Distribution Pair', fontsize=32)
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'pairs_feasibility_heatmap_max.png'), dpi=300)
     plt.close()
@@ -75,7 +98,7 @@ def plot_pairs_analysis(data_list, output_dir):
     avg_by_source = df.groupby('source')['max_violation'].mean().sort_values()
     plt.figure(figsize=(10, 6))
     sns.barplot(x=avg_by_source.values, y=avg_by_source.index, palette='Reds_d')
-    plt.title('Average Max Violation by Source Distribution', fontsize=14)
+    plt.title('Average Max Violation by Source Distribution', fontsize=28)
     plt.xlabel('Average Max Violation')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'pairs_feasibility_barplot_source.png'), dpi=300)
@@ -85,7 +108,7 @@ def plot_pairs_analysis(data_list, output_dir):
     avg_by_target = df.groupby('target')['max_violation'].mean().sort_values()
     plt.figure(figsize=(10, 6))
     sns.barplot(x=avg_by_target.values, y=avg_by_target.index, palette='Blues_d')
-    plt.title('Average Max Violation by Target Distribution', fontsize=14)
+    plt.title('Average Max Violation by Target Distribution', fontsize=28)
     plt.xlabel('Average Max Violation')
     plt.tight_layout()
     plt.savefig(os.path.join(output_dir, 'pairs_feasibility_barplot_target.png'), dpi=300)
