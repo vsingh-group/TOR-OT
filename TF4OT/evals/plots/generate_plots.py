@@ -107,6 +107,8 @@ for metric in METRICS:
     except Exception as e:
         print(f"Error loading {metric}: {e}")
 
+print (summary_improvements)
+
 # Global Font Settings for larger ticks
 plt.rcParams.update({'font.size': 14, 'axes.labelsize': 20, 'xtick.labelsize': 20, 'ytick.labelsize': 20})
 
@@ -321,21 +323,29 @@ plt.close()
 
 
 # --- Plot 2: Linear Scale ---
-max_N = int(N_break_even * 7) 
+
+plt.rcParams.update({'font.size': 14, 'axes.labelsize': 30, 'xtick.labelsize': 30, 'ytick.labelsize': 30})
+
+
+max_N = 2000 #int(N_break_even * 7) 
 N_values_lin = np.linspace(100, max_N, 500)
 
 avg_time_tot_lin = (T_TRAIN_SEC / N_values_lin) + T_TOT_INFER_SEC
 avg_time_not_lin = np.full_like(N_values_lin, T_NOT_SEC)
 
-plt.figure(figsize=(10, 4))
-plt.plot(N_values_lin, avg_time_not_lin, label=f'NeuralOT', linewidth=4, color='darkred', linestyle='--')
-plt.plot(N_values_lin, avg_time_tot_lin, label=f'ToR-OT', linewidth=4, color='darkgreen')
+# for i in range(len(N_values_lin)):
+#     print (N_values_lin[i], avg_time_tot_lin[i])
+# print (avg_time_tot_lin)
+
+plt.figure(figsize=(18, 7))
+plt.plot(N_values_lin, avg_time_not_lin, label=f'NeuralOT', linewidth=5, color='indianred', linestyle='--')
+plt.plot(N_values_lin, avg_time_tot_lin, label=f'ToR-OT', linewidth=5, color='darkgreen')
 # plt.plot(N_break_even, T_NOT_SEC, 'ko', label=f'Break-even: N $\\approx$ {int(N_break_even):,}')
 
-plt.xlabel('Number of Samples', fontsize=20)
-plt.ylabel('Amortized time (Sec)', fontsize=20)
+plt.xlabel('Samples', fontsize=30)
+plt.ylabel('Amortized time (sec)', fontsize=30)
 # plt.title('Amortized Runtime Comparison (Linear Scale)', fontsize=16)
-plt.legend(fontsize=20, loc='upper right', framealpha=1)
+plt.legend(fontsize=30, loc='upper right', framealpha=1)
 plt.grid(True, which="both", ls="-", alpha=0.2)
 plt.grid(True, which="major", ls="-", alpha=0.5)
 
