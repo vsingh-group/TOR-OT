@@ -302,7 +302,7 @@ N_values_log = np.logspace(min_exp, max_exp, 100)
 avg_time_tot_log = (T_TRAIN_SEC / N_values_log) + T_TOT_INFER_SEC
 avg_time_not_log = np.full_like(N_values_log, T_NOT_SEC)
 
-plt.figure(figsize=(8, 6))
+plt.figure(figsize=(6, 6))
 plt.loglog(N_values_log, avg_time_not_log, label=f'Standard (NOT): {T_NOT_SEC}s/sample', linewidth=2, color='tab:orange', linestyle='--')
 plt.loglog(N_values_log, avg_time_tot_log, label=f'Amortized (TOT): {T_TRAIN_HOURS}h train + {T_TOT_INFER_SEC}s/sample', linewidth=2, color='tab:blue')
 plt.plot(N_break_even, T_NOT_SEC, 'ko', label=f'Break-even: N $\\approx$ {int(N_break_even):,}')
@@ -323,31 +323,62 @@ plt.close()
 
 
 # --- Plot 2: Linear Scale ---
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
-plt.rcParams.update({'font.size': 14, 'axes.labelsize': 30, 'xtick.labelsize': 30, 'ytick.labelsize': 30})
+# --- Plot 2: Linear Scale ---
 
+plt.rcParams.update({
+    'font.size': 14,
+    'axes.labelsize': 30,
+    'xtick.labelsize': 30,
+    'ytick.labelsize': 30
+})
 
-max_N = 2000 #int(N_break_even * 7) 
-N_values_lin = np.linspace(100, max_N, 500)
+max_N = 1000
+N_values_lin = np.linspace(50, max_N, 100)
 
 avg_time_tot_lin = (T_TRAIN_SEC / N_values_lin) + T_TOT_INFER_SEC
 avg_time_not_lin = np.full_like(N_values_lin, T_NOT_SEC)
 
-# for i in range(len(N_values_lin)):
-#     print (N_values_lin[i], avg_time_tot_lin[i])
-# print (avg_time_tot_lin)
+plt.figure(figsize=(7, 7))
 
-plt.figure(figsize=(18, 7))
-plt.plot(N_values_lin, avg_time_not_lin, label=f'NeuralOT', linewidth=5, color='indianred', linestyle='--')
-plt.plot(N_values_lin, avg_time_tot_lin, label=f'ToR-OT', linewidth=5, color='darkgreen')
-# plt.plot(N_break_even, T_NOT_SEC, 'ko', label=f'Break-even: N $\\approx$ {int(N_break_even):,}')
+plt.plot(
+    N_values_lin, avg_time_not_lin,
+    label='NeuralOT', linewidth=5, color='indianred', linestyle='--'
+)
+plt.plot(
+    N_values_lin, avg_time_tot_lin,
+    label='ToR-OT', linewidth=5, color='darkgreen'
+)
 
 plt.xlabel('Samples', fontsize=30)
 plt.ylabel('Amortized time (sec)', fontsize=30)
-# plt.title('Amortized Runtime Comparison (Linear Scale)', fontsize=16)
-plt.legend(fontsize=30, loc='upper right', framealpha=1)
-plt.grid(True, which="both", ls="-", alpha=0.2)
-plt.grid(True, which="major", ls="-", alpha=0.5)
+plt.legend(fontsize=28, loc='upper right', framealpha=0.5)
+
+
+ax = plt.gca()
+
+# show only these labels: 500, 1500, 2500, 3500, ...
+ymin, ymax = ax.get_ylim()
+start = 500
+step = 1000
+yticks = np.arange(start, ymax + step, step)
+ax.set_yticks(yticks)
+ax.set_ylim(ymin, ymax)  # keep autoscaled limits
+
+# grid on those ticks
+ax.grid(True, which="major", ls="-", alpha=0.5)
+
+# Optional: ensure ticks align nicely from 0
+# ax.set_ylim(bottom=0)
+
+# Optional: if you want faint minor grid lines too
+# ax.yaxis.set_minor_locator(mticker.MultipleLocator(100))
+
+ax.grid(True, which="major", ls="-", alpha=0.5)
+ax.grid(True, which="minor", ls="-", alpha=0.2)
 
 plt.tight_layout()
 

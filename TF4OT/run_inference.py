@@ -82,7 +82,7 @@ def inference_routine(cfg):
 
     # Loading MODEL
     logger.info(f"Loading model from: {model_full_path}")
-    pytorch_model, tokenizer = load_model_by_name(model_base_path)
+    pytorch_model, tokenizer = load_model_by_name(model_base_path, cfg=cfg)
 
     # Loading TEST dataset
     logger.info("Loading dataset: " + cfg.data.hf_dataset)
@@ -173,11 +173,12 @@ def inference_routine(cfg):
 
     # Limit test batches if not testing full dataset
     if hasattr(cfg.inference, 'test_over_testset') and cfg.inference.test_over_testset:
-        logger.info(f"{'='*80}")
-        logger.info("Starting testset evaluation...")
-        logger.info(f"{'='*80}\n")
-        eval_all_testset(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path,
-                        test_batches=test_loader, device=device, model_name=model_name)
+        #logger.info(f"{'='*80}")
+        #logger.info("Starting testset evaluation...")
+        #logger.info(f"{'='*80}\n")
+        #eval_all_testset(cfg, pytorch_model=pytorch_model, tokenizer=tokenizer, model_base_path=model_base_path,
+        #                test_batches=test_loader, device=device, model_name=model_name)
+        pass
 
 
 
@@ -717,6 +718,17 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
     logger.info(f"  Std:    {all_tv_sparse.std():.6e}")
     logger.info("="*80 + "\n")
 
+
+    logger.info("Constraint Violations (Row):")
+    logger.info(f"  Mean:   {all_row_violation.mean():.6e}")
+    logger.info(f"  Std:    {all_row_violation.std():.6e}")
+    logger.info("="*80 + "\n")
+    
+    logger.info("Constraint Violations (Col):")
+    logger.info(f"  Mean:   {all_col_violation.mean():.6e}")
+    logger.info(f"  Std:    {all_col_violation.std():.6e}")
+    logger.info("="*80 + "\n")
+    
     logger.info("OT Cost Difference:")
     logger.info(f"  Mean:   {all_otcost_diff.mean():.6e}")
     logger.info(f"  Median: {np.median(all_otcost_diff):.6e}")
@@ -760,10 +772,12 @@ def eval_all_testset(cfg, pytorch_model=None, tokenizer=None, model_base_path=No
             f"{r['mape_sparse']:.3e}",
             f"{r['hellinger_sparse']:.3e}",
             f"{r['tv_sparse']:.3e}",
-            f"{r['otcost_diff']:.3e}"
+            f"{r['otcost_diff']:.3e}",
+            f"{r['row_violation']:.3e}",
+            f"{r['col_violation']:.3e}"
         ])
 
-    headers = ['Batch', 'Metric', 'MAE', 'MAPE', 'Hellinger', 'TV', 'OT Cost Diff']
+    headers = ['Batch', 'Metric', 'MAE', 'MAPE', 'Hellinger', 'TV', 'OT Cost Diff', 'Row Violation', 'Col Violation']
 
     
     # Print summary table to terminal
@@ -1004,7 +1018,7 @@ def create_analysis_notebook(model_base_path, filename, cfg, n_bins, num_batches
     logger.info("="*80 + "\n")
 
 
-def load_model_by_name(model_base_path: str, device: str = "cuda"):
+def load_model_by_name(model_base_path: str, device: str = "cuda", cfg=None):
     """
     Load a TokenRegressor saved in:
       artifacts/{name}/model_weights.pth
@@ -1017,10 +1031,14 @@ def load_model_by_name(model_base_path: str, device: str = "cuda"):
     yaml_config_path = os.path.join(model_base_path, "config.yaml")
 
     if os.path.exists(yaml_config_path):
-        cfg = OmegaConf.load(yaml_config_path)
-        cfg = OmegaConf.to_container(cfg, resolve=True)
+        try:
+            cfg_loaded = OmegaConf.load(yaml_config_path)
+            cfg = OmegaConf.to_container(cfg_loaded, resolve=True)
+        except Exception:
+            pass # ignore if resolve fails
     else:
-        raise FileNotFoundError(f"No config file found at {yaml_config_path}")
+        # Fallback to current config
+        pass
 
     # Rebuild tokenizer from config
     tokenizer_cfg = cfg["tokenizer"]["DigitTokenizer"]
