@@ -1,31 +1,23 @@
+"""Setup for the ToR-OT package (v2 in ``torot/``; the legacy v1 code in ``TF4OT/`` is
+installed alongside but its pinned dependencies are listed in ``TF4OT/requirements.txt``)."""
 
-"""Setup for pip package."""
 import setuptools
 
-def _strip_comments_from_line(s: str) -> str:
-  """Parses a line of a requirements.txt file."""
-  requirement, *_ = s.split('#')
-  return requirement.strip()
 
-
-def _parse_requirements(requirements_txt_path: str) -> list[str]:
-  """Returns a list of dependencies for setup() from requirements.txt."""
-
-  with open(requirements_txt_path) as fp:
-    # Parse comments.
-    lines = [_strip_comments_from_line(line) for line in fp.read().splitlines()]
-    # Remove empty lines and direct github repos (not allowed in setup.py)
-    return [l for l in lines if (l and 'github.com' not in l)]
+def _parse_requirements(path: str) -> list[str]:
+    with open(path) as fp:
+        lines = [line.split("#")[0].strip() for line in fp.read().splitlines()]
+    return [line for line in lines if line]
 
 
 setuptools.setup(
-    name='TF4OT',
-    version='1.0',
-    description='TF4OT: Transformers for Optimal Transport',
-    author='Ivan Jaen Marquez @ UW-Madison, Takis Chytas @ UW-Madison, Vikas Singh @ UW-Madison',
-    author_email='ivanjaenm@gmail.com',
-    install_requires=_parse_requirements('requirements.txt'),
-    packages=setuptools.find_packages(),
-    package_data={
-        '': ['**/*.gin', '**/*.proto'],
-    })
+    name="torot",
+    version="2.0.0",
+    description="ToR-OT: Learning Optimal Transport Plans Via Autoregressive Token Regression",
+    author="Ivan Jaen Marquez, Takis Chytas, Vikas Singh (University of Wisconsin-Madison)",
+    author_email="ivanjaenm@cs.wisc.edu",
+    python_requires=">=3.11",
+    install_requires=_parse_requirements("torot/requirements.txt"),
+    packages=setuptools.find_packages(exclude=("torot.tests",)),
+    package_data={"torot": ["configs/*.yaml"]},
+)

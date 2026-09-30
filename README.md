@@ -1,85 +1,43 @@
-# TOT: Transformers for Optimal Transport.
-### Code for the paper: _"Transformers learn to approximately solve Optimal Transport"_.
+# ToR-OT: Learning Optimal Transport Plans Via Autoregressive Token Regression
 
-## ⚙️ Python Environment Setup
+Code for the NeurIPS 2026 paper *"Learning Optimal Transport Plans Via Autoregressive
+Token Regression"* (Ivan Jaen Marquez, Takis Chytas, Vikas Singh — University of
+Wisconsin–Madison).
 
-### Setup via conda environment
+ToR-OT casts discrete optimal transport as sequence generation: a transformer reads the
+two marginals and the cost type and decodes the sparse optimal plan row by row as tokens.
+
+## Repository layout
+
+| Directory | Contents |
+|---|---|
+| [`torot/`](torot/) | **v2 (camera-ready)**: encoder–decoder model, exponent-first numeric tokenizer, significance-weighted loss, Hugging Face corpus generator, training and evaluation. See [`torot/README.md`](torot/README.md). |
+| [`TF4OT/`](TF4OT/) | v1 code used for the submitted experiments (single-prefix decoder, row-wise datasets) plus the helper scripts, notebooks, assets and cluster files that produced the paper's figures. See [`TF4OT/README.md`](TF4OT/README.md). |
+| `paper/` | Manuscript. |
+
+## Quick start (v2)
+
 ```bash
 source ~/anaconda3/etc/profile.d/conda.sh
-conda create --name env_TF4OT python=3.11
-conda activate env_TF4OT
-pip3 install -e .
-pip3 install -r requirements.txt
+conda create -y -n env_torot python=3.11
+conda activate env_torot
+pip install -e .
+pytest torot/tests
 ```
 
-### Setup via docker
-```bash
-docker build -f image.dockerfile -t ivanjaenm/tf4ot:v1 . --push
-```
+Then follow [`torot/README.md`](torot/README.md) for data generation, training and evaluation.
 
-## 🛢️ Synthetic data generator
+## Citation
 
-### Run data generator (cpu)
-```bash
-python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --dataset_size=100_000 --upload --cost_fixed --row_wise --output_dir=./_otdata_100K_rowwise_costfixed --repo_name='ivanjaenm/otdata_100K_rowwise_cost_fixed'
-python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --dataset_size=100_000 --upload --cost_fixed --output_dir=./_otdata_100K_costfixed --repo_name='ivanjaenm/otdata_100K_cost_fixed' 
-python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --dataset_size=100_000 --upload --cost_variable --row_wise --output_dir=./_otdata_100K_rowwise_costvariable --repo_name='ivanjaenm/otdata_100K_rowwise_cost_variable'
-python3 -m TF4OT.run_datagenerator --n_bins=10 --metric='sqeuclidean' --dataset_size=100_000 --upload --cost_variable --output_dir=./_otdata_100K_costvariable --repo_name='ivanjaenm/otdata_100K_cost_variable'
-python3 -m TF4OT.run_datagenerator --n_bins=10 --dataset_size=100_000 --upload --cost_semivariable --row_wise --output_dir=./_otdata_100K_rowwise_costsemivariable --repo_name='ivanjaenm/otdata_100K_rowwise_cost_semivariable'
-python3 -m TF4OT.run_datagenerator --n_bins=10 --dataset_size=100_000 --upload --cost_semivariable --output_dir=./_otdata_100K_costsemivariable --repo_name='ivanjaenm/otdata_100K_cost_semivariable'
-```
-Metric options: ['euclidean', 'sqeuclidean', 'cityblock', 'hamming', 'rogerstanimoto', 'russellrao', 'canberra', 'jaccard']
-
-
-## 🚀 Training Pipeline Overview
-
-### Run training (gpu)
-```bash
-CUDA_VISIBLE_DEVICES=7 python3 -m TF4OT.run_training --config-name TF_100K_cost_fixed
-CUDA_VISIBLE_DEVICES=4,5,6,7 python3 -m TF4OT.run_training --config-name TF_100K_cost_fixed
-```
-
-## 📊 Evaluation
-
-### Run inference (gpu)
-```bash
-CUDA_VISIBLE_DEVICES=0 python3 -m TF4OT.run_inference --config-name TF_100K_cost_semivariable
-```
-
-### Run tests
-```bash
-python3 -m TF4OT.tokenizers_test
-python3 -m TF4OT.vocabs_test
-```
-
-### Run all experiments in the background
-```bash
-nohup ./TF4OT/run_all.sh &
-```
-
-### Generate plots (evals/plots)
-```bash
-comparison_box_plots_1d.ipynb
-```
-```bash
-comparison_box_plots_2d.ipynb
-```
-```bash
-python3 generate_plots.py
-```
-```bash
-python3 generate_feasibility_plots.py ./experiments/cost_semivariable/model_dim768_context512_tflayers24_tfheads16_num_prefix1_dropout0_flashTrue_data600K_rowwise_costsemivariable_prec4_bins30_DigitTokenizer_epochs25_batch128
-```
-
-
-
-## 🌟 Citation
-If you find this work is helpful to your research, please consider citing our paper:
-```
-@inproceedings{,
-  title={Transformers learn to approximately solve Optimal Transport},
-  author={},
-  booktitle={ArXiv},
-  year={2025}
+```bibtex
+@inproceedings{jaenmarquez2026torot,
+  title     = {Learning Optimal Transport Plans Via Autoregressive Token Regression},
+  author    = {Jaen Marquez, Ivan and Chytas, Takis and Singh, Vikas},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2026}
 }
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).

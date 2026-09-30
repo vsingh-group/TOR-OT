@@ -9,7 +9,8 @@ RUN apt-get -yqq install rsync
 RUN apt-get -y install git
 RUN apt-get install nvtop
 
-COPY ./requirements.txt /tmp/requirements.txt
+# build from the repository root: docker build -f TF4OT/image.dockerfile .
+COPY ./TF4OT/requirements.txt /tmp/requirements.txt
 #ENV PATH="/home/software/bin:${PATH}"
 #ENV STAGING_DIR=/staging/jaenmarquez
 

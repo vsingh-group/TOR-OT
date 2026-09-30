@@ -1,0 +1,51 @@
+# ToR-OT v2 default training configuration (~50M parameters).
+data:
+  repo_id: ivanjaenm/otdata_v2
+  cache_dir: null
+  train_split: train
+  val_split: val
+  max_bins: 200
+  transpose_aug_prob: 0.5
+  num_workers: 8
+
+tokenizer:
+  mantissa_digits: 4
+  max_exponent: 9
+
+model:
+  d_model: 512
+  n_heads: 8
+  enc_layers: 6
+  dec_layers: 12
+  d_ff: 1408
+  fourier_bands: 8
+  dropout: 0.0
+  max_seq_len: 4096
+
+loss:
+  digit_weight_decay: 0.5
+  exponent_weight: 1.0
+  ordinal_eps: 0.05
+
+optim:
+  lr: 3.0e-4
+  betas: [0.9, 0.95]
+  weight_decay: 0.1
+  warmup_steps: 2000
+  max_steps: 200000
+  min_lr_ratio: 0.1
+  batch_size: 64
+  grad_clip: 1.0
+  ema_decay: 0.999
+
+run:
+  out_dir: experiments/torot/base
+  seed: 0
+  log_every: 50
+  val_every: 2000
+  val_batches: 20
+  val_decode_instances: 256
+  max_decode_len: 2048
+  bf16: true
+  compile: false
+  resume: null

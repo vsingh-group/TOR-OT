@@ -1,0 +1,20 @@
+# Sanity-check configuration: a few million parameters, short run.
+model:
+  d_model: 128
+  n_heads: 4
+  enc_layers: 2
+  dec_layers: 4
+  d_ff: 384
+  fourier_bands: 6
+
+optim:
+  lr: 1.0e-3
+  warmup_steps: 200
+  max_steps: 5000
+  batch_size: 32
+
+run:
+  out_dir: experiments/torot/tiny
+  val_every: 500
+  val_batches: 5
+  val_decode_instances: 32
