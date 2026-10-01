@@ -9,6 +9,8 @@ targets are numbers rather than words:
 * **Ordinal soft labels.** For digit and exponent slots a small probability ``eps`` is
   moved to each numeric neighbour (d-1, d+1), so predicting 3 for a true 4 costs less
   than predicting 9. No auxiliary numeric loss is used.
+* **z-loss.** ``z_loss * logsumexp(logits)^2`` keeps the logits from drifting to large
+  magnitudes (a known source of training instability); it does not change the optimum.
 """
 
 from __future__ import annotations
@@ -27,10 +29,12 @@ class PlanLoss(nn.Module):
         digit_weight_decay: float = 0.5,
         exponent_weight: float = 1.0,
         ordinal_eps: float = 0.05,
+        z_loss: float = 0.0,
     ):
         super().__init__()
         self.tok = tokenizer
         self.eps = float(ordinal_eps)
+        self.z_loss = float(z_loss)
         weights = torch.ones(KIND_DIGIT + tokenizer.D)
         weights[KIND_EXP] = exponent_weight
         for p in range(tokenizer.D):
@@ -41,7 +45,8 @@ class PlanLoss(nn.Module):
         """logits [B, T, E], targets [B, T] (ids), kinds [B, T] (KIND_PAD for padding)."""
         tok = self.tok
         E = logits.shape[-1]
-        logp = F.log_softmax(logits.float(), dim=-1)
+        logits = logits.float()
+        logp = F.log_softmax(logits, dim=-1)
         valid = kinds != KIND_PAD
         kinds_c = kinds.clamp(min=0)
         tgt = targets.clamp(min=0, max=E - 1)
@@ -64,7 +69,11 @@ class PlanLoss(nn.Module):
         nll = -((1.0 - eps_lo - eps_hi) * lp_t + eps_lo * lp_lo + eps_hi * lp_hi)
 
         w = self.kind_weights[kinds_c] * valid.float()
-        return (w * nll).sum() / w.sum().clamp(min=1.0)
+        loss = (w * nll).sum() / w.sum().clamp(min=1.0)
+        if self.z_loss > 0.0:
+            lse = torch.logsumexp(logits, dim=-1)
+            loss = loss + self.z_loss * (lse.pow(2) * valid.float()).sum() / valid.float().sum().clamp(min=1.0)
+        return loss
 
 
 @torch.no_grad()

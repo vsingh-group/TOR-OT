@@ -16,17 +16,20 @@ import json
 import math
 import os
 import time
+
+# variable-length batches fragment the CUDA allocator; expandable segments avoid spurious OOMs
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 from typing import Dict, List, Optional
+
+import copy
 
 import torch
 import torch.distributed as dist
-from datasets import load_dataset
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
 from torch.utils.data import DataLoader
 
 from torot.config import Config, load_config, save_config
-from torot.data.dataset import Collator, OTPlanDataset, SizeBucketBatchSampler, batch_to_device
+from torot.data.dataset import Collator, OTPlanDataset, SizeBucketBatchSampler, batch_to_device, load_corpus
 from torot.decode import predict_plans
 from torot.loss import PlanLoss, token_accuracy
 from torot.metrics import aggregate, evaluate_instance
@@ -52,6 +55,36 @@ def is_main() -> bool:
 
 def unwrap(model: torch.nn.Module) -> ToROT:
     return model.module if isinstance(model, DDP) else model
+
+
+# --------------------------------------------------------------------------- EMA
+class EMA:
+    """Exponential moving average of the weights, evaluated and checkpointed as ``best.pt``.
+
+    The decay is warmed up, ``min(decay, (1 + t) / (10 + t))``, so that early in training
+    the average tracks the live weights instead of the random initialisation.
+    """
+
+    def __init__(self, model: torch.nn.Module, decay: float):
+        self.module = copy.deepcopy(model).eval()
+        for p in self.module.parameters():
+            p.requires_grad_(False)
+        self.decay = decay
+        self.updates = 0
+
+    @torch.no_grad()
+    def update(self, model: torch.nn.Module) -> None:
+        self.updates += 1
+        d = min(self.decay, (1.0 + self.updates) / (10.0 + self.updates))
+        for p_ema, p in zip(self.module.parameters(), model.parameters()):
+            p_ema.lerp_(p.detach(), 1.0 - d)
+
+    def state_dict(self) -> dict:
+        return {"module": self.module.state_dict(), "updates": self.updates}
+
+    def load_state_dict(self, state: dict) -> None:
+        self.module.load_state_dict(state["module"])
+        self.updates = state["updates"]
 
 
 # --------------------------------------------------------------------------- optimisation
@@ -114,14 +147,57 @@ def validate(
     return out
 
 
+# --------------------------------------------------------------------------- progress file
+def write_progress(
+    path: str, cfg: Config, step: int, start_step: int, t0: float, train_loss: float, last_val: Dict[str, float], best_val: float
+) -> None:
+    """Overwrite a short human-readable status file (``progress.txt``) for quick checks."""
+    elapsed = time.time() - t0
+    rate = elapsed / max(1, step - start_step)
+    remaining = (cfg.optim.max_steps - step) * rate
+    lines = [
+        f"updated     {time.strftime('%Y-%m-%d %H:%M:%S')}",
+        f"step        {step} / {cfg.optim.max_steps}  ({100.0 * step / cfg.optim.max_steps:.1f}%)",
+        f"elapsed     {elapsed / 3600:.2f} h   ETA {remaining / 3600:.2f} h   ({rate:.3f} s/step)",
+        f"train loss  {train_loss:.4f}   lr {lr_at(step, cfg):.2e}",
+    ]
+    if last_val:
+        lines.append(
+            "last val    step {step}  loss {loss:.4f}  ptr_acc {ptr:.3f}  exp_acc {exp:.3f}  digit1_acc {d1:.3f}".format(
+                step=last_val.get("step", 0),
+                loss=last_val.get("val/loss", float("nan")),
+                ptr=last_val.get("val/acc/tgt_ptr", float("nan")),
+                exp=last_val.get("val/acc/exponent", float("nan")),
+                d1=last_val.get("val/acc/digit1", float("nan")),
+            )
+        )
+        lines.append(
+            "decoded     mape_med {mape:.4f}  cost_gap_med {gap:+.2e}  max_viol_med {viol:.2e}  support_recall {rec:.3f}".format(
+                mape=last_val.get("val/mape_ref_support/median", float("nan")),
+                gap=last_val.get("val/cost_gap/median", float("nan")),
+                viol=last_val.get("val/max_violation/median", float("nan")),
+                rec=last_val.get("val/support_recall/mean", float("nan")),
+            )
+        )
+    lines.append(f"best val    loss {best_val:.4f}" if best_val < float("inf") else "best val    (none yet)")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.replace(tmp, path)
+
+
 # --------------------------------------------------------------------------- checkpoints
-def save_checkpoint(path: str, model: ToROT, ema: AveragedModel, optimizer, step: int, best: float, cfg: Config) -> None:
+def save_checkpoint(
+    path: str, model: ToROT, ema: EMA, optimizer, step: int, epoch: int, best: float, cfg: Config
+) -> None:
     torch.save(
         {
             "model": model.state_dict(),
             "ema": ema.module.state_dict(),
+            "ema_updates": ema.updates,
             "optimizer": optimizer.state_dict(),
             "step": step,
+            "epoch": epoch,
             "best_val": best,
         },
         path,
@@ -140,18 +216,27 @@ def train(cfg: Config) -> None:
     tok = PlanTokenizer(cfg.tokenizer.mantissa_digits, cfg.tokenizer.max_exponent)
     collate = Collator(tok)
 
-    ds = load_dataset(cfg.data.repo_id, cache_dir=cfg.data.cache_dir)
+    ds = load_corpus(cfg.data.repo_id, cfg.data.cache_dir)
     train_ds = OTPlanDataset(ds[cfg.data.train_split], cfg.data.transpose_aug_prob)
     val_ds = OTPlanDataset(ds[cfg.data.val_split])
     train_sampler = SizeBucketBatchSampler(
-        train_ds.sizes(), cfg.optim.batch_size, shuffle=True, seed=cfg.run.seed, rank=rank, world_size=world
+        train_ds.sizes(),
+        cfg.optim.batch_size,
+        max_tokens=cfg.optim.max_tokens,
+        shuffle=True,
+        seed=cfg.run.seed,
+        rank=rank,
+        world_size=world,
     )
     train_loader = DataLoader(
         train_ds, batch_sampler=train_sampler, collate_fn=collate, num_workers=cfg.data.num_workers, pin_memory=True
     )
+    # shuffled with a fixed seed: a deterministic validation subset that mixes support sizes
     val_loader = DataLoader(
         val_ds,
-        batch_sampler=SizeBucketBatchSampler(val_ds.sizes(), cfg.optim.batch_size, shuffle=False),
+        batch_sampler=SizeBucketBatchSampler(
+            val_ds.sizes(), cfg.optim.batch_size, max_tokens=cfg.optim.max_tokens, shuffle=True, seed=cfg.run.seed
+        ),
         collate_fn=collate,
         num_workers=cfg.data.num_workers,
     )
@@ -159,24 +244,31 @@ def train(cfg: Config) -> None:
     base_model = ToROT(cfg.model, tok.vocab_size).to(device)
     if is_main():
         print(f"parameters: {base_model.num_parameters() / 1e6:.1f}M, train instances: {len(train_ds)}")
-    ema = AveragedModel(base_model, multi_avg_fn=get_ema_multi_avg_fn(cfg.optim.ema_decay), use_buffers=True)
+    ema = EMA(base_model, cfg.optim.ema_decay)
     model: torch.nn.Module = DDP(base_model, device_ids=[device.index]) if world > 1 else base_model
     if cfg.run.compile:
         model = torch.compile(model)
-    loss_fn = PlanLoss(tok, cfg.loss.digit_weight_decay, cfg.loss.exponent_weight, cfg.loss.ordinal_eps).to(device)
+    loss_fn = PlanLoss(
+        tok, cfg.loss.digit_weight_decay, cfg.loss.exponent_weight, cfg.loss.ordinal_eps, cfg.loss.z_loss
+    ).to(device)
     optimizer = build_optimizer(base_model, cfg)
 
-    step, best_val = 0, float("inf")
+    step, epoch, best_val = 0, 0, float("inf")
     if cfg.run.resume:
         ckpt = torch.load(cfg.run.resume, map_location=device)
         base_model.load_state_dict(ckpt["model"])
-        ema.module.load_state_dict(ckpt["ema"])
+        ema.load_state_dict({"module": ckpt["ema"], "updates": ckpt.get("ema_updates", ckpt["step"])})
         optimizer.load_state_dict(ckpt["optimizer"])
         step, best_val = ckpt["step"], ckpt["best_val"]
+        epoch = ckpt.get("epoch", 0) + 1          # restart from a fresh data order, not the saved epoch's
+        if is_main():
+            print(f"resumed from {cfg.run.resume} at step {step} (epoch {epoch})")
 
     log_path = os.path.join(cfg.run.out_dir, "log.jsonl")
+    progress_path = os.path.join(cfg.run.out_dir, "progress.txt")
+    start_step = step
+    last_val: Dict[str, float] = {}
     model.train()
-    epoch = 0
     t0 = time.time()
     while step < cfg.optim.max_steps:
         train_sampler.set_epoch(epoch)
@@ -193,7 +285,7 @@ def train(cfg: Config) -> None:
             loss.backward()
             grad_norm = torch.nn.utils.clip_grad_norm_(base_model.parameters(), cfg.optim.grad_clip)
             optimizer.step()
-            ema.update_parameters(base_model)
+            ema.update(base_model)
             step += 1
 
             if is_main() and step % cfg.run.log_every == 0:
@@ -204,23 +296,27 @@ def train(cfg: Config) -> None:
                     "grad_norm": float(grad_norm),
                     "tokens": int(batch["kinds"].ge(0).sum()),
                     "elapsed_s": time.time() - t0,
+                    "peak_mem_gb": torch.cuda.max_memory_allocated() / 2**30 if device.type == "cuda" else 0.0,
                     **token_accuracy(logits, batch["target_ids"], batch["kinds"]),
                 }
-                print(json.dumps(rec))
+                print(json.dumps(rec), flush=True)
                 with open(log_path, "a") as f:
                     f.write(json.dumps(rec) + "\n")
+                write_progress(progress_path, cfg, step, start_step, t0, loss.item(), last_val, best_val)
 
             if step % cfg.run.val_every == 0 or step == cfg.optim.max_steps:
                 if is_main():
                     metrics = validate(ema.module, loss_fn, tok, val_loader, cfg, device)
                     metrics["step"] = step
-                    print(json.dumps(metrics))
+                    print(json.dumps(metrics), flush=True)
                     with open(log_path, "a") as f:
                         f.write(json.dumps(metrics) + "\n")
                     if metrics["val/loss"] < best_val:
                         best_val = metrics["val/loss"]
-                        save_checkpoint(os.path.join(cfg.run.out_dir, "best.pt"), base_model, ema, optimizer, step, best_val, cfg)
-                    save_checkpoint(os.path.join(cfg.run.out_dir, "last.pt"), base_model, ema, optimizer, step, best_val, cfg)
+                        save_checkpoint(os.path.join(cfg.run.out_dir, "best.pt"), base_model, ema, optimizer, step, epoch, best_val, cfg)
+                    save_checkpoint(os.path.join(cfg.run.out_dir, "last.pt"), base_model, ema, optimizer, step, epoch, best_val, cfg)
+                    last_val = metrics
+                    write_progress(progress_path, cfg, step, start_step, t0, loss.item(), last_val, best_val)
                 if dist.is_initialized():
                     dist.barrier()
         epoch += 1

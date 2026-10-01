@@ -14,7 +14,7 @@ Token Regression* (NeurIPS 2026). The legacy single-prefix model lives in `TF4OT
 | Loss | token cross-entropy | significance-weighted (exponent, d1 > d2 > …) cross-entropy with ordinal soft labels |
 | Symmetries | — | transpose augmentation and test-time transpose averaging; permutation equivariance by construction |
 | Decoding | sampling, no cache, fixed length | greedy, grammar-constrained, KV cache, stops at EOS (see [Decoding](#decoding)) |
-| Training | Adam, constant LR, fp32 | AdamW, warmup + cosine, grad clipping, bf16, EMA, best-val checkpoint |
+| Training | Adam, constant LR, fp32 | AdamW (lr 1e-4), warmup + cosine, grad clipping, bf16, EMA, best-val checkpoint; QK-norm in all attention and the pointer head, z-loss |
 | Data | one fixed `n` per dataset, rows stored independently | same protocol (1D grid, uniformly random marginals, POT plans) but one HF corpus with `n` ∈ [5, 100] and whole plans per record |
 
 ## Decoding
@@ -72,8 +72,13 @@ python -m torot.data.generate --out_dir ./otdata_v2 --repo_id ivanjaenm/otdata_v
 ```
 
 The instance protocol is the same as v1: 1D regular grid on [0, 1], marginals sampled
-uniformly at random (no parametric family), all six cost types, exact plan from POT's
-network simplex. The only new axis is the support size, `n` ∈ [5, 100] per instance
+uniformly at random (no parametric family), six cost types, exact plan from POT's
+network simplex. The cost set differs from v1, where L1, L2, L∞ and Minkowski all collapse
+to |x − y| on a line (four of six "types" were the same problem). v2 uses six costs that are
+pairwise distinct in 1D (`torot/data/cost.py`): `sqeuclidean` |x−y|², `euclidean` |x−y|
+(non-unique optima), `canberra`, `sqrt_euclidean` |x−y|^½ (concave), `cubic_euclidean` |x−y|³,
+and `gaussian` 1 − exp(−|x−y|²/2σ²). The loader checks the corpus' cost names against this
+list and refuses a corpus generated with another cost set. The only new axis is the support size, `n` ∈ [5, 100] per instance
 (`n = m`; `equal_sizes: false` in `GenConfig` samples them independently). One record
 holds a whole plan, not a row.
 
@@ -85,6 +90,10 @@ Every instance is reproducible from its `seed`.
 
 ## Training
 
+The configs default to the corpus `ivanjaenm/torot_data_1M_v2` (generated with the six
+distinct costs above); override with `data.repo_id=...`, which may also be a local
+`save_to_disk` directory produced by `torot.data.generate --out_dir`.
+
 ```bash
 python -m torot.train --config torot/configs/tiny.yaml                       # sanity run
 torchrun --nproc_per_node 4 -m torot.train --config torot/configs/default.yaml
@@ -92,6 +101,22 @@ torchrun --nproc_per_node 4 -m torot.train --config torot/configs/default.yaml
 
 Overrides use dot syntax, e.g. `optim.lr=2e-4 run.out_dir=experiments/torot/lr2e-4`.
 Checkpoints (`best.pt`, `last.pt`) contain raw and EMA weights; `config.yaml` is saved beside them.
+
+For long runs, launch detached so the job survives a dropped SSH/VPN session:
+
+```bash
+torot/run_train.sh 0,1,6,7 experiments/torot/base_25ep optim.max_steps=72000
+```
+
+### Monitoring
+
+| | |
+|---|---|
+| `cat <out_dir>/progress.txt` | one-glance status: step, ETA, latest train/validation metrics, best validation loss (updated every 50 steps) |
+| `python -m torot.progress <out_dir>` | table of all validations (`--last N` for the most recent) |
+| `tail -f <out_dir>/train.log` | raw stdout/stderr of the run (`run_train.sh` launches) |
+| `<out_dir>/log.jsonl` | machine-readable log: one JSON line per 50 training steps and per validation |
+| `kill $(cat <out_dir>/train.pid)` | stop a run started with `run_train.sh`; resume with `run.resume=<out_dir>/last.pt` |
 
 ## Evaluation
 

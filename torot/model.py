@@ -31,15 +31,16 @@ LayerCache = Dict[str, torch.Tensor]
 
 # --------------------------------------------------------------------------- building blocks
 class RMSNorm(nn.Module):
+    """Fused RMS normalisation over the last dimension (``F.rms_norm`` keeps far fewer
+    intermediates for backward than a hand-written float32 implementation)."""
+
     def __init__(self, dim: int, eps: float = 1e-6):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        xf = x.float()
-        xf = xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + self.eps)
-        return (xf * self.weight.float()).to(x.dtype)
+        return F.rms_norm(x, (x.shape[-1],), self.weight.to(x.dtype), self.eps)
 
 
 class SwiGLU(nn.Module):
@@ -73,7 +74,11 @@ class RotaryEmbedding(nn.Module):
 
 
 class Attention(nn.Module):
-    """Multi-head attention with optional cross-attention context, RoPE and KV cache."""
+    """Multi-head attention with optional cross-attention context, RoPE and KV cache.
+
+    Queries and keys are RMS-normalised per head (QK-norm) so attention logits stay
+    bounded; this removes the logit-growth instability seen without it.
+    """
 
     def __init__(self, dim: int, n_heads: int, dropout: float = 0.0):
         super().__init__()
@@ -85,6 +90,8 @@ class Attention(nn.Module):
         self.wk = nn.Linear(dim, dim, bias=False)
         self.wv = nn.Linear(dim, dim, bias=False)
         self.wo = nn.Linear(dim, dim, bias=False)
+        self.q_norm = RMSNorm(self.head_dim)
+        self.k_norm = RMSNorm(self.head_dim)
         self.dropout = dropout
 
     def _split(self, x: torch.Tensor) -> torch.Tensor:
@@ -103,13 +110,13 @@ class Attention(nn.Module):
     ) -> torch.Tensor:
         """x: [B, T, D] queries. ctx: [B, S, D] keys/values (None -> self-attention).
         key_mask: [B, S] bool, True = attend. cache: per-layer dict, updated in place."""
-        q = self._split(self.wq(x))
+        q = self.q_norm(self._split(self.wq(x)))
         cross = ctx is not None
         if cross and cache is not None and "k" in cache:
             k, v = cache["k"], cache["v"]
         else:
             src = ctx if cross else x
-            k, v = self._split(self.wk(src)), self._split(self.wv(src))
+            k, v = self.k_norm(self._split(self.wk(src))), self._split(self.wv(src))
             if rope is not None and not cross:
                 k = rope(k, offset)
             if cache is not None:
@@ -221,10 +228,12 @@ class ToROT(nn.Module):
         self.dec_layers = nn.ModuleList(DecoderLayer(cfg) for _ in range(cfg.dec_layers))
         self.dec_norm = RMSNorm(D)
 
-        # output heads
+        # output heads (pointer query/key are RMS-normalised: bounded pointer logits)
         self.lm_head = nn.Linear(D, vocab_size, bias=False)
         self.ptr_q = nn.Linear(D, D, bias=False)
         self.ptr_k = nn.Linear(D, D, bias=False)
+        self.ptr_q_norm = RMSNorm(D)
+        self.ptr_k_norm = RMSNorm(D)
         self.dropout = nn.Dropout(cfg.dropout)
 
         self.apply(self._init_weights)
@@ -282,8 +291,8 @@ class ToROT(nn.Module):
     def output_logits(self, h: torch.Tensor, enc: EncoderOutput) -> torch.Tensor:
         """[B, T, V + m_pad]: vocabulary logits followed by target-bin pointer logits."""
         vocab_logits = self.lm_head(h)
-        q = self.ptr_q(h)
-        k = self.ptr_k(enc.tgt_states)
+        q = self.ptr_q_norm(self.ptr_q(h))
+        k = self.ptr_k_norm(self.ptr_k(enc.tgt_states))
         ptr_logits = torch.einsum("btd,bsd->bts", q, k) / math.sqrt(h.shape[-1])
         ptr_logits = ptr_logits.masked_fill(~enc.tgt_mask[:, None, :], float("-inf"))
         return torch.cat([vocab_logits, ptr_logits], dim=-1)

@@ -13,10 +13,9 @@ import time
 from typing import List, Optional
 
 import torch
-from datasets import load_dataset
 
 from torot.config import load_config
-from torot.data.dataset import OTPlanDataset
+from torot.data.dataset import OTPlanDataset, load_corpus
 from torot.decode import predict_plans
 from torot.metrics import aggregate, evaluate_instance
 from torot.model import ToROT
@@ -51,7 +50,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     args = parse_args(argv)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, tok, cfg = load_model(args.checkpoint, device, use_ema=not args.raw_weights)
-    ds = load_dataset(args.repo_id or cfg.data.repo_id, cache_dir=cfg.data.cache_dir)[args.split]
+    ds = load_corpus(args.repo_id or cfg.data.repo_id, cfg.data.cache_dir)[args.split]
     data = OTPlanDataset(ds)
     total = len(data) if args.max_instances is None else min(len(data), args.max_instances)
 

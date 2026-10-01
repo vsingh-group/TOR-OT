@@ -5,23 +5,51 @@ from __future__ import annotations
 import random
 from typing import Any, Dict, Iterator, List, Sequence
 
+import os
+
 import numpy as np
 import torch
+from datasets import DatasetDict, load_dataset, load_from_disk
 from torch.utils.data import Dataset, Sampler
 
+from torot.data.cost import COST_TYPES
 from torot.data.supports import pad_coords
 from torot.tokenizer import KIND_PAD, PlanTokenizer
 
 Instance = Dict[str, Any]
 
 
-def record_to_instance(rec: dict) -> Instance:
+def load_corpus(repo_id: str, cache_dir: str | None = None) -> DatasetDict:
+    """Load the corpus from the Hub, or from a local ``save_to_disk`` directory."""
+    if os.path.isdir(repo_id):
+        return load_from_disk(repo_id)
+    return load_dataset(repo_id, cache_dir=cache_dir)
+
+
+def cost_label_map(hf_split) -> List[int]:
+    """Map the split's ``cost_type`` class labels onto ``COST_TYPES`` indices.
+
+    Raises if the corpus was generated with a different cost set, so that a stale corpus
+    can never be silently trained on or evaluated with the wrong cost matrices.
+    """
+    names = list(hf_split.features["cost_type"].names)
+    unknown = [n for n in names if n not in COST_TYPES]
+    if unknown:
+        raise ValueError(
+            f"corpus cost types {names} do not match torot.data.cost.COST_TYPES {list(COST_TYPES)} "
+            f"(unknown: {unknown}); regenerate the corpus with torot.data.generate"
+        )
+    return [COST_TYPES.index(n) for n in names]
+
+
+def record_to_instance(rec: dict, cost_map: Sequence[int] | None = None) -> Instance:
     """Convert a raw HF record (lists) into numpy arrays."""
+    cost = int(rec["cost_type"])
     return {
         "n": int(rec["n"]),
         "m": int(rec["m"]),
         "dim": int(rec["dim"]),
-        "cost_type": int(rec["cost_type"]),
+        "cost_type": cost if cost_map is None else int(cost_map[cost]),
         "coords_src": pad_coords(np.asarray(rec["coords_src"], dtype=np.float64)),
         "coords_tgt": pad_coords(np.asarray(rec["coords_tgt"], dtype=np.float64)),
         "a": np.asarray(rec["a"], dtype=np.float64),
@@ -58,12 +86,13 @@ class OTPlanDataset(Dataset):
     def __init__(self, hf_split, transpose_aug_prob: float = 0.0):
         self.split = hf_split
         self.transpose_aug_prob = transpose_aug_prob
+        self.cost_map = cost_label_map(hf_split)
 
     def __len__(self) -> int:
         return len(self.split)
 
     def __getitem__(self, idx: int) -> Instance:
-        inst = record_to_instance(self.split[int(idx)])
+        inst = record_to_instance(self.split[int(idx)], self.cost_map)
         if self.transpose_aug_prob > 0.0 and random.random() < self.transpose_aug_prob:
             inst = transpose_instance(inst)
         return inst
@@ -134,29 +163,54 @@ class Collator:
 
 
 class SizeBucketBatchSampler(Sampler[List[int]]):
-    """Batches instances of similar size (n + m) to limit padding; DDP-aware."""
+    """Batches instances of similar size (n + m) to limit padding; DDP-aware.
+
+    A batch holds at most ``batch_size`` instances and at most ``max_tokens`` *padded*
+    decoder tokens (instances x longest sequence in the batch), estimated from the support
+    sizes: a plan with n + m bins serialises to about ``tokens_per_bin * (n + m)`` tokens.
+    """
 
     def __init__(
         self,
         sizes: np.ndarray,
         batch_size: int,
+        max_tokens: int | None = None,
         shuffle: bool = True,
         seed: int = 0,
         rank: int = 0,
         world_size: int = 1,
         bucket_noise: float = 0.1,
+        tokens_per_bin: float = 6.5,
     ):
         self.sizes = np.asarray(sizes)
         self.batch_size = batch_size
+        self.max_tokens = max_tokens
         self.shuffle = shuffle
         self.seed = seed
         self.rank = rank
         self.world_size = world_size
         self.bucket_noise = bucket_noise
+        self.tokens_per_bin = tokens_per_bin
         self.epoch = 0
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = epoch
+
+    def _split(self, order: np.ndarray) -> List[np.ndarray]:
+        """Greedily cut the size-sorted ``order`` into batches under both caps."""
+        if self.max_tokens is None:
+            return [order[i : i + self.batch_size] for i in range(0, len(order), self.batch_size)]
+        est = self.tokens_per_bin * self.sizes[order] + 2
+        batches, start = [], 0
+        for i in range(1, len(order) + 1):
+            count = i - start
+            longest = est[start:i].max()          # order is sorted, but keys are noisy
+            if count > self.batch_size or count * longest > self.max_tokens:
+                batches.append(order[start : i - 1])
+                start = i - 1
+        if start < len(order):
+            batches.append(order[start:])
+        return batches
 
     def _batches(self) -> List[np.ndarray]:
         rng = np.random.default_rng(self.seed + self.epoch)
@@ -164,7 +218,7 @@ class SizeBucketBatchSampler(Sampler[List[int]]):
         if self.shuffle:
             keys = keys * (1.0 + rng.uniform(-self.bucket_noise, self.bucket_noise, size=keys.shape))
         order = np.argsort(keys, kind="stable")
-        batches = [order[i : i + self.batch_size] for i in range(0, len(order), self.batch_size)]
+        batches = self._split(order)
         if self.shuffle:
             rng.shuffle(batches)
         # every rank sees the same number of batches
