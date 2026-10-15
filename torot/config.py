@@ -16,6 +16,7 @@ class DataConfig:
     val_split: str = "val"
     max_bins: int = 200                 # upper bound on n and m (sanity check only)
     transpose_aug_prob: float = 0.5     # symmetry 6.1: swap (a, b) and transpose the plan
+    residual_noise: float = 0.0         # row decoding: relative noise on the remaining capacities during training
     num_workers: int = 4
 
 
@@ -35,6 +36,8 @@ class ModelConfig:
     fourier_bands: int = 8
     dropout: float = 0.0
     max_seq_len: int = 4096
+    decoding: str = "plan"              # "plan": one sequence per plan; "row": one sequence per row,
+                                        # conditioned on the remaining column capacities
 
 
 @dataclass

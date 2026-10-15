@@ -47,10 +47,10 @@ Each record is one instance:
 | `dim` | support dimension (1) |
 | `cost_type` | one of {cost_types} |
 | `coords_src`, `coords_tgt` | bin centres of a regular grid on [0,1], canonical order |
-| `a`, `b` | marginals (float64, sum to 1); uniformly random weights for the random splits |
+| `a`, `b` | marginals (float64, sum to 1); for the random splits drawn by the `marginals` sampler of the generation config (`simplex`: uniform on the probability simplex, Dirichlet(1,…,1); `normalized_uniform`: normalised i.i.d. U(0,1) weights) |
 | `plan_rows`, `plan_cols`, `plan_vals` | COO of the optimal plan returned by POT's network simplex (`ot.emd`) |
 | `ot_cost` | optimal cost with the max-normalised cost matrix |
-| `family_src`, `family_tgt` | `uniform_random`, or the named density for the OOD evaluation split |
+| `family_src`, `family_tgt` | the marginal sampler (`simplex` or `normalized_uniform`), or the named density for the OOD evaluation split |
 | `seed` | per-instance seed (instances are fully reproducible) |
 
 The cost matrix is not stored; it is `torot.data.cost.cost_matrix(coords_src, coords_tgt, cost_type)`.

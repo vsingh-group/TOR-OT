@@ -1,9 +1,17 @@
 """Marginals (histograms) over bin coordinates.
 
-Training / in-distribution data uses the v1 protocol: i.i.d. uniform weights per bin,
-normalised to sum to one. No parametric family is assumed. The named 1D densities below
-are used **only** for the out-of-distribution evaluation split, mirroring the OOD
-evaluation of the paper.
+Training / in-distribution marginals are drawn by one of the ``MARGINAL_SAMPLERS``; no
+parametric family is assumed:
+
+* ``simplex`` (default): uniform on the probability simplex, i.e. Dirichlet(1, ..., 1)
+  (equivalently: i.i.d. Exponential(1) weights, normalised).
+* ``normalized_uniform``: i.i.d. U(0, 1) weights normalised to sum to one. This is what v1
+  and the ``torot_data_1M_v2`` corpus used (labelled ``uniform_random`` there). It is *not*
+  uniform on the simplex: it concentrates near the centre (histograms stay close to flat; a bin
+  essentially never exceeds 3/n, which ~5 % of bins do under Dirichlet(1) at n = 30).
+
+The named 1D densities below are used **only** for the out-of-distribution evaluation
+split, mirroring the OOD evaluation of the paper.
 """
 
 from __future__ import annotations
@@ -27,9 +35,23 @@ def _normalise(p: np.ndarray) -> np.ndarray:
     return p / total
 
 
-def uniform_random(rng: np.random.Generator, n: int) -> np.ndarray:
-    """v1 marginal: i.i.d. uniform(0, 1) weights over ``n`` bins, normalised."""
+def uniform_simplex(rng: np.random.Generator, n: int) -> np.ndarray:
+    """Uniform on the probability simplex (Dirichlet(1, ..., 1)).
+
+    No bin is zeroed: tiny masses are part of this distribution and are kept as drawn.
+    """
+    return rng.dirichlet(np.ones(n))
+
+
+def normalized_uniform(rng: np.random.Generator, n: int) -> np.ndarray:
+    """v1 / ``torot_data_1M_v2`` marginal: i.i.d. U(0, 1) weights over ``n`` bins, normalised."""
     return _normalise(rng.uniform(size=n))
+
+
+MARGINAL_SAMPLERS: Dict[str, Callable[[np.random.Generator, int], np.ndarray]] = {
+    "simplex": uniform_simplex,
+    "normalized_uniform": normalized_uniform,
+}
 
 
 # --------------------------------------------------------------------------- named 1D densities (OOD evaluation only)

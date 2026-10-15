@@ -7,6 +7,10 @@ Encoder (permutation-equivariant set encoder, symmetry 6.2):
     so relabelling the bins (with their coordinates attached) permutes the encoder
     states and, through the pointer heads, the predicted plan.
 
+Row decoding (``cfg.decoding == "row"``): the encoder sees the *remaining* problem, i.e. the
+    source bins not yet decoded and the remaining column capacities as target masses. The
+    first source bin is the row being generated and carries a learned marker.
+
 Decoder (causal, RoPE, cross-attention to the encoder):
     Output logits are the concatenation of vocabulary logits and *pointer* logits
     (dot products with the target-bin encoder states), so column-index prediction is
@@ -218,6 +222,10 @@ class ToROT(nn.Module):
         self.mass_proj = nn.Linear(3, D)
         self.coord_proj = nn.Linear(self.fourier.out_dim, D)
         self.cost_emb = nn.Embedding(len(COST_TYPES), D)
+        if cfg.decoding not in ("plan", "row"):
+            raise ValueError(f"model.decoding must be 'plan' or 'row', got {cfg.decoding!r}")
+        if cfg.decoding == "row":
+            self.current_emb = nn.Parameter(torch.randn(D) * 0.02)   # marks the row being generated
         self.enc_layers = nn.ModuleList(EncoderLayer(cfg) for _ in range(cfg.enc_layers))
         self.enc_norm = RMSNorm(D)
 
@@ -262,6 +270,10 @@ class ToROT(nn.Module):
             + self.mass_proj(mass_features(b))
             + self.coord_proj(self.fourier(batch["coords_tgt"]))
         )
+        if self.cfg.decoding == "row":
+            first = torch.zeros(n_pad, 1, device=a.device, dtype=src.dtype)
+            first[0] = 1.0
+            src = src + first * self.current_emb
         cost = self.cost_emb(batch["cost_type"]).unsqueeze(1)
         x = self.dropout(torch.cat([cost, src, tgt], dim=1))
         key_mask = torch.cat(

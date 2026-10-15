@@ -8,6 +8,8 @@ target-index order):
 * The source index is implicit: it is the number of ``ROW`` tokens emitted so far. A plan
   always has exactly ``n`` row blocks; a row with no entries is ``ROW`` followed directly
   by the next ``ROW`` (or by ``EOS`` for the last row).
+* Row decoding (``model.decoding: row``) serialises a single row as the same format without
+  the ``ROW`` token: ``BOS ( <tgt j> <E-k> d1 .. dD )* EOS`` (``encode_row`` / ``decode_row``).
 * ``<tgt j>`` is a *pointer* id that refers to the j-th target-bin encoder state. Pointer
   ids are laid out after the fixed vocabulary: ``tgt j -> V + j``.
 * A mass v in (0, 1] is written exponent-first in scientific notation,
@@ -193,7 +195,25 @@ class PlanTokenizer:
                 break
         return np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64), np.asarray(vals, dtype=np.float64)
 
+    def encode_row(self, cols: Sequence[int], vals: Sequence[float]) -> Tuple[List[int], List[int]]:
+        """Serialise a single row: ``BOS ( <tgt j> <E-k> d1 .. dD )* EOS``."""
+        ids, kinds = self.encode(np.zeros(len(cols), dtype=np.int64), cols, vals, n=1)
+        return ids[:1] + ids[2:], kinds[:1] + kinds[2:]          # drop the ROW token
+
+    def decode_row(self, ids: Sequence[int]) -> Tuple[np.ndarray, np.ndarray]:
+        """Parse a single-row sequence (with or without the leading BOS) into (cols, vals)."""
+        ids = [int(t) for t in ids]
+        if ids and ids[0] == self.BOS:
+            ids = ids[1:]
+        _, cols, vals = self.decode([self.ROW] + ids)
+        return cols, vals
+
     # ------------------------------------------------------------------ grammar (constrained decoding)
+    @staticmethod
+    def row_state() -> GrammarState:
+        """Initial grammar state for a single-row sequence; use ``allowed_mask`` with ``n=1``."""
+        return GrammarState(phase=PH_ROW, row=0)
+
     def advance(self, state: GrammarState, t: int) -> None:
         """Update ``state`` in place after emitting token ``t`` (assumed admissible)."""
         if t == self.ROW and state.phase in (PH_START, PH_ROW, PH_ENTRY_DONE):

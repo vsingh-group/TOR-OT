@@ -15,7 +15,22 @@ Token Regression* (NeurIPS 2026). The legacy single-prefix model lives in `TF4OT
 | Symmetries | — | transpose augmentation and test-time transpose averaging; permutation equivariance by construction |
 | Decoding | sampling, no cache, fixed length | greedy, grammar-constrained, KV cache, stops at EOS (see [Decoding](#decoding)) |
 | Training | Adam, constant LR, fp32 | AdamW (lr 1e-4), warmup + cosine, grad clipping, bf16, EMA, best-val checkpoint; QK-norm in all attention and the pointer head, z-loss |
-| Data | one fixed `n` per dataset, rows stored independently | same protocol (1D grid, uniformly random marginals, POT plans) but one HF corpus with `n` ∈ [5, 100] and whole plans per record |
+| Data | one fixed `n` per dataset, rows stored independently; marginals = normalised i.i.d. U(0,1) weights | one HF corpus with `n` ∈ [5, 100] and whole plans per record; marginals uniform on the probability simplex (Dirichlet(1)) by default |
+
+## Decoding modes (`model.decoding`)
+
+* `plan` (default): one sequence per plan, `BOS (ROW (⟨tgt j⟩ E-k d1 d2 d3 d4)*)ⁿ EOS`.
+  Row i attends to all tokens of rows 0…i−1. Decoder self-attention costs O((n+m)²).
+* `row`: one sequence per row, `BOS (⟨tgt j⟩ E-k d1 d2 d3 d4)* EOS`, generated from the
+  *remaining problem*: source bins i…n−1 (bin i, the row being generated, carries a learned
+  marker) and the remaining column capacities r = b − Σ_{i'<i} π_{i'} as target masses. After
+  each row the predicted masses are subtracted from r; the last row is set to the final r.
+  This conditions on the earlier rows without keeping them in context: the rows i…n−1 of an
+  optimal plan are an optimal plan of the remaining problem, so row i is the first row of that
+  problem's plan (`tests/test_row_decoding.py` checks this with POT). Decoder attention costs
+  Σᵢ kᵢ² for kᵢ nonzeros in row i. Each row re-runs the encoder on the remaining problem.
+  Training uses one example per (instance, row) built on the fly from the same corpus;
+  `data.residual_noise` perturbs the capacities during training.
 
 ## Decoding
 
@@ -67,13 +82,18 @@ Generate the corpus on a CPU machine and push it to the Hub (this is the only st
 runs POT):
 
 ```bash
-python -m torot.data.generate --out_dir ./otdata_v2 --repo_id ivanjaenm/otdata_v2 --push \
-    --train 2000000 --val 5000 --test_id 10000 --test_extrap 5000 --seed 0 --workers 16
+python -m torot.data.generate --out_dir ./torot_data_1M_simplex --repo_id ivanjaenm/torot_data_1M_simplex --push \
+    --train 1000000 --val 2500 --test_id 5000 --test_extrap 5000 --seed 0 --workers 16
 ```
 
-The instance protocol is the same as v1: 1D regular grid on [0, 1], marginals sampled
-uniformly at random (no parametric family), six cost types, exact plan from POT's
-network simplex. The cost set differs from v1, where L1, L2, L∞ and Minkowski all collapse
+Instances: 1D regular grid on [0, 1], six cost types, exact plan from POT's network
+simplex. Marginals are drawn **uniformly from the probability simplex**, i.e.
+Dirichlet(1, …, 1) (`--marginals simplex`, the default; no parametric family). v1 and the
+corpus `ivanjaenm/torot_data_1M_v2` instead normalised i.i.d. U(0, 1) weights, which is *not*
+uniform on the simplex: those histograms stay close to flat (the largest bin averages ~2/n and
+a bin essentially never exceeds 3/n, while under Dirichlet(1) about 5 % of bins exceed 3/n at
+n = 30). `--marginals normalized_uniform`
+reproduces that corpus exactly (its records are labelled `uniform_random`). The cost set differs from v1, where L1, L2, L∞ and Minkowski all collapse
 to |x − y| on a line (four of six "types" were the same problem). v2 uses six costs that are
 pairwise distinct in 1D (`torot/data/cost.py`): `sqeuclidean` |x−y|², `euclidean` |x−y|
 (non-unique optima), `canberra`, `sqrt_euclidean` |x−y|^½ (concave), `cubic_euclidean` |x−y|³,
@@ -90,9 +110,10 @@ Every instance is reproducible from its `seed`.
 
 ## Training
 
-The configs default to the corpus `ivanjaenm/torot_data_1M_v2` (generated with the six
-distinct costs above); override with `data.repo_id=...`, which may also be a local
-`save_to_disk` directory produced by `torot.data.generate --out_dir`.
+The configs default to the corpus `ivanjaenm/torot_data_1M_v2` (six distinct costs,
+`normalized_uniform` marginals); switch to a simplex corpus with `data.repo_id=...` once it is
+published. `data.repo_id` may also be a local `save_to_disk` directory produced by
+`torot.data.generate --out_dir`.
 
 ```bash
 python -m torot.train --config torot/configs/tiny.yaml                       # sanity run

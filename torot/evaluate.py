@@ -12,6 +12,9 @@ import os
 import time
 from typing import List, Optional
 
+# variable-length batches fragment the CUDA allocator; expandable segments avoid spurious OOMs
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import torch
 
 from torot.config import load_config

@@ -23,13 +23,23 @@ from typing import Dict, List, Optional
 
 import copy
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 
 from torot.config import Config, load_config, save_config
-from torot.data.dataset import Collator, OTPlanDataset, SizeBucketBatchSampler, batch_to_device, load_corpus
+from torot.data.dataset import (
+    Collator,
+    OTPlanDataset,
+    OTRowDataset,
+    SizeBucketBatchSampler,
+    batch_to_device,
+    cost_label_map,
+    load_corpus,
+    record_to_instance,
+)
 from torot.decode import predict_plans
 from torot.loss import PlanLoss, token_accuracy
 from torot.metrics import aggregate, evaluate_instance
@@ -118,14 +128,21 @@ def validate(
     loss_fn: PlanLoss,
     tok: PlanTokenizer,
     loader: DataLoader,
+    decode_instances: List[dict],
     cfg: Config,
     device: torch.device,
+    decode_batch: int = 64,
 ) -> Dict[str, float]:
+    """Teacher-forced loss/accuracy on ``val_batches`` batches, plus metrics of plans decoded
+    for a fixed list of whole validation instances (the same list at every validation)."""
     model.eval()
     losses: List[float] = []
     accs: List[Dict[str, float]] = []
     decoded: List[Dict[str, float]] = []
-    n_decoded = 0
+    for start in range(0, len(decode_instances), decode_batch):
+        chunk = decode_instances[start : start + decode_batch]
+        plans = predict_plans(model, tok, chunk, device, max_len=cfg.run.max_decode_len)
+        decoded += [evaluate_instance(P, inst) for P, inst in zip(plans, chunk)]
     for i, batch in enumerate(loader):
         if i >= cfg.run.val_batches:
             break
@@ -134,11 +151,6 @@ def validate(
             logits = model(batch)
         losses.append(loss_fn(logits, batch["target_ids"], batch["kinds"]).item())
         accs.append(token_accuracy(logits, batch["target_ids"], batch["kinds"]))
-        if n_decoded < cfg.run.val_decode_instances:
-            instances = batch["instances"][: cfg.run.val_decode_instances - n_decoded]
-            plans = predict_plans(model, tok, instances, device, max_len=cfg.run.max_decode_len)
-            decoded += [evaluate_instance(P, inst) for P, inst in zip(plans, instances)]
-            n_decoded += len(instances)
     out = {"val/loss": sum(losses) / max(1, len(losses))}
     for k in {k for a in accs for k in a}:
         out[f"val/{k}"] = sum(a[k] for a in accs if k in a) / max(1, sum(k in a for a in accs))
@@ -217,8 +229,16 @@ def train(cfg: Config) -> None:
     collate = Collator(tok)
 
     ds = load_corpus(cfg.data.repo_id, cfg.data.cache_dir)
-    train_ds = OTPlanDataset(ds[cfg.data.train_split], cfg.data.transpose_aug_prob)
-    val_ds = OTPlanDataset(ds[cfg.data.val_split])
+    if cfg.model.decoding == "row":
+        train_ds = OTRowDataset(ds[cfg.data.train_split], cfg.data.transpose_aug_prob, cfg.data.residual_noise)
+        val_ds = OTRowDataset(ds[cfg.data.val_split])
+    else:
+        train_ds = OTPlanDataset(ds[cfg.data.train_split], cfg.data.transpose_aug_prob)
+        val_ds = OTPlanDataset(ds[cfg.data.val_split])
+    val_split = ds[cfg.data.val_split]
+    decode_idx = np.random.default_rng(cfg.run.seed).permutation(len(val_split))[: cfg.run.val_decode_instances]
+    val_cost_map = cost_label_map(val_split)
+    decode_instances = [record_to_instance(val_split[int(k)], val_cost_map) for k in sorted(decode_idx)]
     train_sampler = SizeBucketBatchSampler(
         train_ds.sizes(),
         cfg.optim.batch_size,
@@ -227,6 +247,7 @@ def train(cfg: Config) -> None:
         seed=cfg.run.seed,
         rank=rank,
         world_size=world,
+        tokens_per_bin=train_ds.tokens_per_size,
     )
     train_loader = DataLoader(
         train_ds, batch_sampler=train_sampler, collate_fn=collate, num_workers=cfg.data.num_workers, pin_memory=True
@@ -235,7 +256,12 @@ def train(cfg: Config) -> None:
     val_loader = DataLoader(
         val_ds,
         batch_sampler=SizeBucketBatchSampler(
-            val_ds.sizes(), cfg.optim.batch_size, max_tokens=cfg.optim.max_tokens, shuffle=True, seed=cfg.run.seed
+            val_ds.sizes(),
+            cfg.optim.batch_size,
+            max_tokens=cfg.optim.max_tokens,
+            shuffle=True,
+            seed=cfg.run.seed,
+            tokens_per_bin=val_ds.tokens_per_size,
         ),
         collate_fn=collate,
         num_workers=cfg.data.num_workers,
@@ -243,7 +269,8 @@ def train(cfg: Config) -> None:
 
     base_model = ToROT(cfg.model, tok.vocab_size).to(device)
     if is_main():
-        print(f"parameters: {base_model.num_parameters() / 1e6:.1f}M, train instances: {len(train_ds)}")
+        unit = "row examples" if cfg.model.decoding == "row" else "instances"
+        print(f"parameters: {base_model.num_parameters() / 1e6:.1f}M, decoding: {cfg.model.decoding}, train {unit}: {len(train_ds)}")
     ema = EMA(base_model, cfg.optim.ema_decay)
     model: torch.nn.Module = DDP(base_model, device_ids=[device.index]) if world > 1 else base_model
     if cfg.run.compile:
@@ -306,7 +333,7 @@ def train(cfg: Config) -> None:
 
             if step % cfg.run.val_every == 0 or step == cfg.optim.max_steps:
                 if is_main():
-                    metrics = validate(ema.module, loss_fn, tok, val_loader, cfg, device)
+                    metrics = validate(ema.module, loss_fn, tok, val_loader, decode_instances, cfg, device)
                     metrics["step"] = step
                     print(json.dumps(metrics), flush=True)
                     with open(log_path, "a") as f:

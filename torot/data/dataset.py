@@ -1,11 +1,20 @@
-"""PyTorch access to the Hugging Face corpus: instances, transpose augmentation, batching."""
+"""PyTorch access to the Hugging Face corpus: instances, transpose augmentation, batching.
+
+Two views of the corpus:
+
+* ``OTPlanDataset`` (``model.decoding: plan``): one example per instance, target = whole plan.
+* ``OTRowDataset`` (``model.decoding: row``): one example per (instance, row i). Rows
+  0..i-1 are taken as fixed, and the example is the *remaining* problem: source bins
+  i..n-1 and the remaining column capacities r = b - sum of rows 0..i-1 as target masses.
+  Row i of the optimal plan is the first row of an optimal plan of that remaining problem,
+  which is the target. The last row is never predicted (it equals the final capacities).
+"""
 
 from __future__ import annotations
 
+import os
 import random
 from typing import Any, Dict, Iterator, List, Sequence
-
-import os
 
 import numpy as np
 import torch
@@ -76,6 +85,30 @@ def transpose_instance(inst: Instance) -> Instance:
     }
 
 
+def dense_plan(inst: Instance) -> np.ndarray:
+    P = np.zeros((inst["n"], inst["m"]), dtype=np.float64)
+    np.add.at(P, (inst["plan_rows"], inst["plan_cols"]), inst["plan_vals"])
+    return P
+
+
+def row_subproblem(inst: Instance, i: int, capacity: np.ndarray) -> Instance:
+    """The remaining problem after rows 0..i-1: source bins i..n-1, target masses ``capacity``.
+
+    Target bins keep their original indices (exhausted ones get mass 0), so pointer ids in
+    the row sequence refer to the original columns. The returned dict has no plan.
+    """
+    return {
+        "n": inst["n"] - i,
+        "m": inst["m"],
+        "dim": inst["dim"],
+        "cost_type": inst["cost_type"],
+        "coords_src": inst["coords_src"][i:],
+        "coords_tgt": inst["coords_tgt"],
+        "a": inst["a"][i:],
+        "b": np.asarray(capacity, dtype=np.float64),
+    }
+
+
 class OTPlanDataset(Dataset):
     """Wraps one split of the HF dataset; optionally applies the transpose augmentation.
 
@@ -97,13 +130,70 @@ class OTPlanDataset(Dataset):
             inst = transpose_instance(inst)
         return inst
 
+    tokens_per_size = 6.5   # decoder tokens per unit of ``sizes()`` (a plan has ~6.5 (n + m) tokens)
+
     def sizes(self) -> np.ndarray:
         """n + m per instance (for bucketing), read column-wise without materialising records."""
         return np.asarray(self.split["n"], dtype=np.int64) + np.asarray(self.split["m"], dtype=np.int64)
 
 
+class OTRowDataset(Dataset):
+    """One example per (instance, row i), i = 0..n-2: the remaining problem and row i as target.
+
+    ``residual_noise`` multiplies the remaining capacities by ``1 + noise * N(0, 1)`` (clipped
+    at 0) so that the model sees capacities like the slightly wrong ones it produces itself
+    at inference time. Transposition is drawn per example, like in ``OTPlanDataset``.
+    """
+
+    tokens_per_size = 1.0   # ``sizes()`` already counts encoder tokens
+
+    def __init__(self, hf_split, transpose_aug_prob: float = 0.0, residual_noise: float = 0.0):
+        self.split = hf_split
+        self.transpose_aug_prob = transpose_aug_prob
+        self.residual_noise = residual_noise
+        self.cost_map = cost_label_map(hf_split)
+        self.n = np.asarray(hf_split["n"], dtype=np.int64)
+        self.m = np.asarray(hf_split["m"], dtype=np.int64)
+        rows = np.maximum(self.n - 1, 0)
+        self.starts = np.concatenate([[0], np.cumsum(rows)[:-1]])
+        self.rows = rows
+
+    def __len__(self) -> int:
+        return int(self.rows.sum())
+
+    def locate(self, idx: int) -> tuple[int, int]:
+        """(instance index, row index) of example ``idx``."""
+        k = int(np.searchsorted(self.starts, idx, side="right") - 1)
+        return k, int(idx - self.starts[k])
+
+    def __getitem__(self, idx: int) -> Instance:
+        k, i = self.locate(int(idx))
+        inst = record_to_instance(self.split[k], self.cost_map)
+        if self.transpose_aug_prob > 0.0 and random.random() < self.transpose_aug_prob:
+            inst = transpose_instance(inst)
+            i = i % max(1, inst["n"] - 1)
+        P = dense_plan(inst)
+        capacity = np.maximum(inst["b"] - P[:i].sum(axis=0), 0.0)
+        if self.residual_noise > 0.0:
+            noise = 1.0 + self.residual_noise * np.random.standard_normal(capacity.shape)
+            capacity = np.maximum(capacity * noise, 0.0)
+        sub = row_subproblem(inst, i, capacity)
+        cols = np.nonzero(P[i] > 0.0)[0]
+        sub["row_cols"], sub["row_vals"] = cols, P[i, cols]
+        return sub
+
+    def sizes(self) -> np.ndarray:
+        """Encoder tokens of every example, (n - i) + m, without materialising records."""
+        i = np.arange(len(self)) - np.repeat(self.starts, self.rows)
+        return np.repeat(self.n + self.m, self.rows) - i
+
+
 class Collator:
-    """Pads a list of instances to a batch and tokenises the plans."""
+    """Pads a list of instances to a batch and tokenises the targets.
+
+    The target is the whole plan (``plan_*`` keys), a single row (``row_cols``/``row_vals``,
+    row decoding), or absent (inference: the sequence is just ``BOS``).
+    """
 
     def __init__(self, tokenizer: PlanTokenizer):
         self.tok = tokenizer
@@ -134,7 +224,12 @@ class Collator:
             src_mask[i, :ni] = True
             tgt_mask[i, :mi] = True
             n[i], m[i], cost_type[i] = ni, mi, inst["cost_type"]
-            ids, kinds = self.tok.encode(inst["plan_rows"], inst["plan_cols"], inst["plan_vals"], ni)
+            if "row_cols" in inst:
+                ids, kinds = self.tok.encode_row(inst["row_cols"], inst["row_vals"])
+            elif "plan_rows" in inst:
+                ids, kinds = self.tok.encode(inst["plan_rows"], inst["plan_cols"], inst["plan_vals"], ni)
+            else:
+                ids, kinds = [self.tok.BOS], [KIND_PAD]
             sequences.append(ids)
             kinds_list.append(kinds)
 
@@ -158,7 +253,6 @@ class Collator:
             "input_ids": ids[:, :-1],
             "target_ids": ids[:, 1:],
             "kinds": kinds[:, 1:],
-            "instances": list(instances),
         }
 
 

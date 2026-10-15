@@ -7,8 +7,10 @@ Example (CPU box):
         --train 2000000 --val 5000 --test_id 10000 --test_extrap 5000 \\
         --seed 0 --workers 16
 
-Instances follow the v1 protocol (1D regular grid, marginals sampled uniformly at random,
-exact plan from POT's network simplex); what varies is the support size ``n``.
+Instances: 1D regular grid, marginals drawn uniformly from the probability simplex
+(``--marginals simplex``, the default) or with v1's normalised uniform weights
+(``--marginals normalized_uniform``, reproduces ``torot_data_1M_v2``), exact plan from POT's
+network simplex; the support size ``n`` varies per instance.
 Every instance is generated from its own seed, so any record can be regenerated
 independently of the number of workers or the chunking.
 """
@@ -28,7 +30,7 @@ import ot
 from datasets import Dataset, DatasetDict
 
 from torot.data.cost import COST_TYPES, cost_matrix
-from torot.data.families import NAMED_1D_FAMILIES, named_marginal, uniform_random
+from torot.data.families import MARGINAL_SAMPLERS, NAMED_1D_FAMILIES, named_marginal
 from torot.data.schema import DATASET_CARD_FRONT_MATTER, DATASET_CARD_TEMPLATE, FEATURES
 from torot.data.supports import grid_1d
 
@@ -43,8 +45,13 @@ class GenConfig:
     extrap_n_min: int = 120               # support size range for test_extrap
     extrap_n_max: int = 200
     equal_sizes: bool = True              # n == m as in v1; False samples n and m independently
+    marginals: str = "simplex"            # "simplex" (Dirichlet(1)) or "normalized_uniform" (v1 / torot_data_1M_v2)
     cost_types: List[str] = field(default_factory=lambda: list(COST_TYPES))
     ood_sizes: List[int] = field(default_factory=lambda: [30, 100])
+
+    def __post_init__(self) -> None:
+        if self.marginals not in MARGINAL_SAMPLERS:
+            raise ValueError(f"marginals must be one of {list(MARGINAL_SAMPLERS)}, got {self.marginals!r}")
 
 
 # --------------------------------------------------------------------------- single instance
@@ -101,9 +108,10 @@ def make_random_instance(seed: int, cfg: GenConfig, extrapolate: bool = False) -
     n = int(rng.integers(lo, hi + 1))
     m = n if cfg.equal_sizes else int(rng.integers(lo, hi + 1))
     xs, xt = grid_1d(n), grid_1d(m)
-    a, b = uniform_random(rng, n), uniform_random(rng, m)
+    sample = MARGINAL_SAMPLERS[cfg.marginals]
+    a, b = sample(rng, n), sample(rng, m)
     cost_type = cfg.cost_types[int(rng.integers(len(cfg.cost_types)))]
-    return _record(seed, xs, xt, a, b, cost_type, "uniform_random", "uniform_random")
+    return _record(seed, xs, xt, a, b, cost_type, cfg.marginals, cfg.marginals)
 
 
 def make_ood_instances(cfg: GenConfig) -> Iterator[dict]:
@@ -207,6 +215,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--no_ood", action="store_true", help="skip the named-density OOD evaluation split")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--marginals", default=None, choices=sorted(MARGINAL_SAMPLERS),
+                   help="marginal sampler (default: GenConfig.marginals = simplex)")
     p.add_argument("--config_json", default=None, help="JSON file overriding GenConfig fields")
     return p.parse_args(argv)
 
@@ -217,6 +227,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     if args.config_json:
         with open(args.config_json) as f:
             cfg = GenConfig(**{**dataclasses.asdict(cfg), **json.load(f)})
+    if args.marginals is not None:
+        cfg = dataclasses.replace(cfg, marginals=args.marginals)
 
     # disjoint seed ranges per split (each split reserves 2 seeds per requested instance)
     offsets = {"train": 0, "val": 2 * args.train, "test_id": 2 * (args.train + args.val)}
