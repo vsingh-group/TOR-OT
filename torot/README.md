@@ -82,7 +82,7 @@ Generate the corpus on a CPU machine and push it to the Hub (this is the only st
 runs POT):
 
 ```bash
-python -m torot.data.generate --out_dir ./torot_data_1M_simplex --repo_id ivanjaenm/torot_data_1M_simplex --push \
+python -m torot.data.generate --out_dir ./torot_data_1M --repo_id ivanjaenm/torot_data_1M --push \
     --train 1000000 --val 2500 --test_id 5000 --test_extrap 5000 --seed 0 --workers 16
 ```
 
