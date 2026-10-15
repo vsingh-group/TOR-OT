@@ -91,3 +91,18 @@ def test_row_model_trains_and_decodes():
         assert np.all(P.sum(0) >= inst["b"] - 1e-9)
     sym = predict_plans(model, tok, instances[:1], torch.device("cpu"), max_len=200, symmetric=True)
     assert sym[0].shape == plans[0].shape
+
+
+def test_leftover_augmentation_only_touches_used_up_columns():
+    split = small_split(num=10)
+    exact = OTRowDataset(split)
+    aug = OTRowDataset(split, residual_leftover_prob=1.0, residual_leftover_range=(1e-6, 1e-2))
+    seen_leftover = False
+    for idx in range(len(exact)):
+        e, a = exact[idx], aug[idx]
+        used_up = e["b"] <= 1e-12
+        assert np.allclose(a["b"][~used_up], e["b"][~used_up])                     # other capacities untouched
+        assert np.all((a["b"][used_up] >= 1e-6) & (a["b"][used_up] <= 1e-2))       # every used-up column got a leftover
+        assert np.array_equal(a["row_cols"], e["row_cols"]) and np.allclose(a["row_vals"], e["row_vals"])  # target unchanged
+        seen_leftover |= bool(used_up.any())
+    assert seen_leftover

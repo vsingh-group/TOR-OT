@@ -29,8 +29,11 @@ Token Regression* (NeurIPS 2026). The legacy single-prefix model lives in `TF4OT
   optimal plan are an optimal plan of the remaining problem, so row i is the first row of that
   problem's plan (`tests/test_row_decoding.py` checks this with POT). Decoder attention costs
   Σᵢ kᵢ² for kᵢ nonzeros in row i. Each row re-runs the encoder on the remaining problem.
-  Training uses one example per (instance, row) built on the fly from the same corpus;
-  `data.residual_noise` perturbs the capacities during training.
+  Training uses one example per (instance, row) built on the fly from the same corpus.
+  At test time the capacities come from the model's own (slightly wrong) rows, so a used-up
+  column can show a tiny leftover; `data.residual_leftover_prob` / `residual_leftover_range`
+  add such leftovers to training examples (target unchanged) so the model learns to ignore
+  them, and `data.residual_noise` perturbs the other capacities.
 
 ## Decoding
 
@@ -110,10 +113,10 @@ Every instance is reproducible from its `seed`.
 
 ## Training
 
-The configs default to the corpus `ivanjaenm/torot_data_1M_v2` (six distinct costs,
-`normalized_uniform` marginals); switch to a simplex corpus with `data.repo_id=...` once it is
-published. `data.repo_id` may also be a local `save_to_disk` directory produced by
-`torot.data.generate --out_dir`.
+The configs default to the corpus `ivanjaenm/torot_data_1M` (marginals uniform on the
+simplex, six distinct costs). `ivanjaenm/torot_data_1M_v2` is the earlier corpus with
+`normalized_uniform` marginals. `data.repo_id` may also be a local `save_to_disk` directory
+produced by `torot.data.generate --out_dir`.
 
 ```bash
 python -m torot.train --config torot/configs/tiny.yaml                       # sanity run

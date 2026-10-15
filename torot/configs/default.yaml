@@ -1,6 +1,6 @@
 # ToR-OT v2 default training configuration (~70M parameters).
 data:
-  repo_id: ivanjaenm/torot_data_1M_v2   # six distinct 1D costs; a local save_to_disk directory also works
+  repo_id: ivanjaenm/torot_data_1M      # uniform-on-simplex marginals, six distinct 1D costs; a local save_to_disk directory also works
   cache_dir: null
   train_split: train
   val_split: val

@@ -140,17 +140,33 @@ class OTPlanDataset(Dataset):
 class OTRowDataset(Dataset):
     """One example per (instance, row i), i = 0..n-2: the remaining problem and row i as target.
 
-    ``residual_noise`` multiplies the remaining capacities by ``1 + noise * N(0, 1)`` (clipped
-    at 0) so that the model sees capacities like the slightly wrong ones it produces itself
-    at inference time. Transposition is drawn per example, like in ``OTPlanDataset``.
+    Two optional perturbations make training capacities look like the slightly wrong ones the
+    model produces itself at inference time (rows are subtracted after being predicted):
+
+    * ``residual_leftover_prob``: each used-up column (exact capacity 0) gets, with this
+      probability, a small leftover drawn log-uniformly from ``residual_leftover_range``. The
+      target row is unchanged, so the model learns to ignore such leftovers instead of
+      routing mass into them.
+    * ``residual_noise``: the other capacities are multiplied by ``1 + noise * N(0, 1)``.
+
+    Transposition is drawn per example, like in ``OTPlanDataset``.
     """
 
     tokens_per_size = 1.0   # ``sizes()`` already counts encoder tokens
 
-    def __init__(self, hf_split, transpose_aug_prob: float = 0.0, residual_noise: float = 0.0):
+    def __init__(
+        self,
+        hf_split,
+        transpose_aug_prob: float = 0.0,
+        residual_noise: float = 0.0,
+        residual_leftover_prob: float = 0.0,
+        residual_leftover_range: Sequence[float] = (1e-6, 1e-2),
+    ):
         self.split = hf_split
         self.transpose_aug_prob = transpose_aug_prob
         self.residual_noise = residual_noise
+        self.residual_leftover_prob = residual_leftover_prob
+        self.log_leftover_range = np.log10(np.asarray(residual_leftover_range, dtype=np.float64))
         self.cost_map = cost_label_map(hf_split)
         self.n = np.asarray(hf_split["n"], dtype=np.int64)
         self.m = np.asarray(hf_split["m"], dtype=np.int64)
@@ -174,9 +190,14 @@ class OTRowDataset(Dataset):
             i = i % max(1, inst["n"] - 1)
         P = dense_plan(inst)
         capacity = np.maximum(inst["b"] - P[:i].sum(axis=0), 0.0)
+        used_up = capacity <= 1e-12
         if self.residual_noise > 0.0:
             noise = 1.0 + self.residual_noise * np.random.standard_normal(capacity.shape)
             capacity = np.maximum(capacity * noise, 0.0)
+        if self.residual_leftover_prob > 0.0:
+            hit = used_up & (np.random.random(capacity.shape) < self.residual_leftover_prob)
+            leftover = 10.0 ** np.random.uniform(*self.log_leftover_range, size=capacity.shape)
+            capacity = np.where(hit, leftover, capacity)
         sub = row_subproblem(inst, i, capacity)
         cols = np.nonzero(P[i] > 0.0)[0]
         sub["row_cols"], sub["row_vals"] = cols, P[i, cols]

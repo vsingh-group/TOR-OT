@@ -10,13 +10,15 @@ from omegaconf import OmegaConf
 
 @dataclass
 class DataConfig:
-    repo_id: str = "ivanjaenm/torot_data_1M_v2"   # six distinct 1D costs (see torot.data.cost); or a local save_to_disk dir
+    repo_id: str = "ivanjaenm/torot_data_1M"      # uniform-on-simplex marginals, six distinct 1D costs; or a local save_to_disk dir
     cache_dir: Optional[str] = None
     train_split: str = "train"
     val_split: str = "val"
     max_bins: int = 200                 # upper bound on n and m (sanity check only)
     transpose_aug_prob: float = 0.5     # symmetry 6.1: swap (a, b) and transpose the plan
     residual_noise: float = 0.0         # row decoding: relative noise on the remaining capacities during training
+    residual_leftover_prob: float = 0.0  # row decoding: chance that a used-up column shows a small fake leftover
+    residual_leftover_range: List[float] = field(default_factory=lambda: [1e-6, 1e-2])  # log-uniform leftover size
     num_workers: int = 4
 
 

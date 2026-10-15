@@ -230,7 +230,13 @@ def train(cfg: Config) -> None:
 
     ds = load_corpus(cfg.data.repo_id, cfg.data.cache_dir)
     if cfg.model.decoding == "row":
-        train_ds = OTRowDataset(ds[cfg.data.train_split], cfg.data.transpose_aug_prob, cfg.data.residual_noise)
+        train_ds = OTRowDataset(
+            ds[cfg.data.train_split],
+            cfg.data.transpose_aug_prob,
+            cfg.data.residual_noise,
+            cfg.data.residual_leftover_prob,
+            cfg.data.residual_leftover_range,
+        )
         val_ds = OTRowDataset(ds[cfg.data.val_split])
     else:
         train_ds = OTPlanDataset(ds[cfg.data.train_split], cfg.data.transpose_aug_prob)
@@ -322,6 +328,7 @@ def train(cfg: Config) -> None:
                     "lr": lr_at(step, cfg),
                     "grad_norm": float(grad_norm),
                     "tokens": int(batch["kinds"].ge(0).sum()),
+                    "examples": int(batch["input_ids"].shape[0]),     # plans (plan mode) or rows (row mode)
                     "elapsed_s": time.time() - t0,
                     "peak_mem_gb": torch.cuda.max_memory_allocated() / 2**30 if device.type == "cuda" else 0.0,
                     **token_accuracy(logits, batch["target_ids"], batch["kinds"]),
