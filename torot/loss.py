@@ -15,6 +15,8 @@ targets are numbers rather than words:
 
 from __future__ import annotations
 
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,7 +43,23 @@ class PlanLoss(nn.Module):
             weights[KIND_DIGIT + p] = digit_weight_decay**p
         self.register_buffer("kind_weights", weights, persistent=False)
 
-    def forward(self, logits: torch.Tensor, targets: torch.Tensor, kinds: torch.Tensor) -> torch.Tensor:
+    def normalizers(self, kinds: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Denominators of the two loss terms: total slot weight and number of valid slots.
+
+        Passing a batch's normalizers to ``forward`` on each of its micro-batches makes the
+        micro-batch losses sum to the loss of the whole batch.
+        """
+        valid = (kinds != KIND_PAD).float()
+        w = self.kind_weights[kinds.clamp(min=0)] * valid
+        return w.sum().clamp(min=1.0), valid.sum().clamp(min=1.0)
+
+    def forward(
+        self,
+        logits: torch.Tensor,
+        targets: torch.Tensor,
+        kinds: torch.Tensor,
+        normalizers: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+    ) -> torch.Tensor:
         """logits [B, T, E], targets [B, T] (ids), kinds [B, T] (KIND_PAD for padding)."""
         tok = self.tok
         E = logits.shape[-1]
@@ -69,10 +87,11 @@ class PlanLoss(nn.Module):
         nll = -((1.0 - eps_lo - eps_hi) * lp_t + eps_lo * lp_lo + eps_hi * lp_hi)
 
         w = self.kind_weights[kinds_c] * valid.float()
-        loss = (w * nll).sum() / w.sum().clamp(min=1.0)
+        w_total, n_valid = self.normalizers(kinds) if normalizers is None else normalizers
+        loss = (w * nll).sum() / w_total
         if self.z_loss > 0.0:
             lse = torch.logsumexp(logits, dim=-1)
-            loss = loss + self.z_loss * (lse.pow(2) * valid.float()).sum() / valid.float().sum().clamp(min=1.0)
+            loss = loss + self.z_loss * (lse.pow(2) * valid.float()).sum() / n_valid
         return loss
 
 

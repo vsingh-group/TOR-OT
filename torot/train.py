@@ -12,6 +12,7 @@ Any config field can be overridden with ``section.key=value``.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import os
@@ -39,6 +40,7 @@ from torot.data.dataset import (
     cost_label_map,
     load_corpus,
     record_to_instance,
+    split_batch,
 )
 from torot.decode import predict_plans
 from torot.loss import PlanLoss, token_accuracy
@@ -311,11 +313,21 @@ def train(cfg: Config) -> None:
             batch = batch_to_device(batch, device)
             for g in optimizer.param_groups:
                 g["lr"] = lr_at(step, cfg)
-            with torch.autocast(device.type, dtype=torch.bfloat16, enabled=cfg.run.bf16 and device.type == "cuda"):
-                logits = model(batch)
-            loss = loss_fn(logits, batch["target_ids"], batch["kinds"])
+            # an oversized batch runs as micro-batches; normalising each by the whole batch's
+            # token weights makes the accumulated gradient that of the whole batch
+            micro = split_batch(batch, cfg.optim.max_dec_tokens)
+            norms = loss_fn.normalizers(batch["kinds"])
             optimizer.zero_grad(set_to_none=True)
-            loss.backward()
+            loss = torch.zeros((), device=device)
+            for j, mb in enumerate(micro):
+                # DDP all-reduces the gradients once, on the last micro-batch
+                last = j == len(micro) - 1
+                with contextlib.nullcontext() if last or world == 1 else model.no_sync():
+                    with torch.autocast(device.type, dtype=torch.bfloat16, enabled=cfg.run.bf16 and device.type == "cuda"):
+                        logits = model(mb)
+                    mb_loss = loss_fn(logits, mb["target_ids"], mb["kinds"], norms)
+                    mb_loss.backward()
+                loss += mb_loss.detach()
             grad_norm = torch.nn.utils.clip_grad_norm_(base_model.parameters(), cfg.optim.grad_clip)
             optimizer.step()
             ema.update(base_model)
@@ -329,9 +341,10 @@ def train(cfg: Config) -> None:
                     "grad_norm": float(grad_norm),
                     "tokens": int(batch["kinds"].ge(0).sum()),
                     "examples": int(batch["input_ids"].shape[0]),     # plans (plan mode) or rows (row mode)
+                    "micro_batches": len(micro),
                     "elapsed_s": time.time() - t0,
                     "peak_mem_gb": torch.cuda.max_memory_allocated() / 2**30 if device.type == "cuda" else 0.0,
-                    **token_accuracy(logits, batch["target_ids"], batch["kinds"]),
+                    **token_accuracy(logits, mb["target_ids"], mb["kinds"]),    # last micro-batch
                 }
                 print(json.dumps(rec), flush=True)
                 with open(log_path, "a") as f:

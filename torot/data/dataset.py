@@ -316,15 +316,16 @@ class SizeBucketBatchSampler(Sampler[List[int]]):
         if self.max_tokens is None:
             return [order[i : i + self.batch_size] for i in range(0, len(order), self.batch_size)]
         est = self.tokens_per_bin * self.sizes[order] + 2
+        counts = np.arange(1, self.batch_size + 1)
         batches, start = [], 0
-        for i in range(1, len(order) + 1):
-            count = i - start
-            longest = est[start:i].max()          # order is sorted, but keys are noisy
-            if count > self.batch_size or count * longest > self.max_tokens:
-                batches.append(order[start : i - 1])
-                start = i - 1
-        if start < len(order):
-            batches.append(order[start:])
+        while start < len(order):
+            # running max: order is sorted, but keys are noisy; count * longest grows with the
+            # prefix length, so the batch is the number of prefixes within the token cap
+            longest = np.maximum.accumulate(est[start : start + self.batch_size])
+            fits = int(np.count_nonzero(counts[: len(longest)] * longest <= self.max_tokens))
+            end = start + max(fits, 1)
+            batches.append(order[start:end])
+            start = end
         return batches
 
     def _batches(self) -> List[np.ndarray]:
@@ -350,3 +351,30 @@ class SizeBucketBatchSampler(Sampler[List[int]]):
 
 def batch_to_device(batch: Dict[str, Any], device: torch.device) -> Dict[str, Any]:
     return {k: (v.to(device, non_blocking=True) if torch.is_tensor(v) else v) for k, v in batch.items()}
+
+
+DECODER_KEYS = ("input_ids", "target_ids", "kinds")
+
+
+def split_batch(batch: Dict[str, Any], max_tokens: int | None) -> List[Dict[str, Any]]:
+    """Cut a collated batch into micro-batches of at most ``max_tokens`` padded decoder tokens.
+
+    A batch is padded to its longest sequence, so a few long rows can make it far larger than
+    the sampler's estimate (in row mode the sampler only counts encoder tokens). Sequences are
+    grouped by length and each micro-batch is trimmed to its own longest one.
+    """
+    B, T = batch["input_ids"].shape
+    if max_tokens is None or B * T <= max_tokens:
+        return [batch]
+    lengths = (batch["kinds"] != KIND_PAD).sum(dim=1)
+    order = torch.argsort(lengths, descending=True)
+    micro, start = [], 0
+    while start < B:
+        longest = max(int(lengths[order[start]]), 1)
+        idx = order[start : start + max(1, max_tokens // longest)]
+        mb = {k: v[idx] for k, v in batch.items()}
+        for k in DECODER_KEYS:
+            mb[k] = mb[k][:, :longest]
+        micro.append(mb)
+        start += len(idx)
+    return micro

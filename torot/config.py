@@ -60,6 +60,8 @@ class OptimConfig:
     min_lr_ratio: float = 0.1
     batch_size: int = 512               # max instances per device batch (token budget binds first)
     max_tokens: int = 65536             # max padded decoder tokens per device batch (~33 GB on A100-40GB)
+    max_dec_tokens: Optional[int] = None  # padded decoder tokens per forward pass; a larger batch is run as
+                                        # micro-batches with gradient accumulation (same update, bounded memory)
     grad_clip: float = 1.0
     ema_decay: float = 0.999
 

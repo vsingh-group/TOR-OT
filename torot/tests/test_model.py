@@ -4,7 +4,7 @@ import torch
 
 from torot.config import LossConfig, ModelConfig
 from torot.data.cost import cost_matrix
-from torot.data.dataset import Collator, transpose_instance
+from torot.data.dataset import Collator, split_batch, transpose_instance
 from torot.data.supports import grid_1d, pad_coords
 from torot.decode import generate, plan_to_dense, predict_plans
 from torot.loss import PlanLoss
@@ -53,6 +53,29 @@ def test_forward_shapes_and_loss():
     loss = PlanLoss(tok, **vars(LossConfig()))(logits, batch["target_ids"], batch["kinds"])
     assert torch.isfinite(loss)
     loss.backward()
+
+
+def test_micro_batches_give_the_full_batch_gradient():
+    rng = np.random.default_rng(1)
+    tok = PlanTokenizer()
+    instances = [make_instance(rng, n, m) for n, m in [(4, 5), (9, 7), (5, 12), (3, 3), (8, 8), (6, 4)]]
+    batch = Collator(tok)(instances)
+    B, T = batch["input_ids"].shape
+    micro = split_batch(batch, max_tokens=2 * T)
+    assert len(micro) > 1 and all(mb["input_ids"].numel() <= 2 * T for mb in micro)
+    assert sum(len(mb["n"]) for mb in micro) == B
+
+    torch.manual_seed(0)
+    model = tiny_model(tok)
+    loss_fn = PlanLoss(tok, **vars(LossConfig()))
+    loss_fn(model(batch), batch["target_ids"], batch["kinds"]).backward()
+    full = [p.grad.clone() for p in model.parameters()]
+    model.zero_grad()
+    norms = loss_fn.normalizers(batch["kinds"])
+    for mb in micro:
+        loss_fn(model(mb), mb["target_ids"], mb["kinds"], norms).backward()
+    for g_full, p in zip(full, model.parameters()):
+        torch.testing.assert_close(p.grad, g_full, rtol=1e-4, atol=1e-6)
 
 
 def test_cached_decoding_matches_full_forward():

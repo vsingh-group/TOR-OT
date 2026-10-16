@@ -38,6 +38,9 @@ optim:
   batch_size: 512       # max instances per device batch; the token budget below binds first
   max_tokens: 65536     # padded decoder tokens per device batch: ~33 GB peak on A100-40GB at 70M params
                         # (use 32768 on 24 GB GPUs: same tokens/s within ~12%, double max_steps)
+  max_dec_tokens: null  # cap on padded decoder tokens per forward pass: larger batches are split into
+                        # micro-batches with gradient accumulation (row mode: max_tokens counts encoder
+                        # tokens only, and one long row pads the whole batch)
   grad_clip: 1.0
   ema_decay: 0.999
 
