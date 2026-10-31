@@ -66,6 +66,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     p.add_argument("--repeats", type=int, default=8, help="instances timed one at a time per size")
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--max_len", type=int, default=4000)
+    p.add_argument("--last_row", choices=("remainder", "model"), default="remainder",
+                   help="row decoding: last row = remaining capacity (default) or decoded by the model")
     p.add_argument("--out", default=None)
     args = p.parse_args(argv)
 
@@ -79,7 +81,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         if not insts:
             print(f"n={n}: no instances, skipped")
             continue
-        predict = lambda xs: predict_plans(model, tok, xs, device, max_len=args.max_len)
+        predict = lambda xs: predict_plans(model, tok, xs, device, max_len=args.max_len, last_row=args.last_row)
         predict(insts[:1])                                                  # warm-up
         single = [_timed(lambda x=x: predict([x]), device) for x in insts[: args.repeats]]
         batch = (insts * (args.batch_size // len(insts) + 1))[: args.batch_size]

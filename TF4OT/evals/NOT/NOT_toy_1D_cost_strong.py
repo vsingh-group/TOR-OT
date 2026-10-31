@@ -50,6 +50,20 @@ def chebyshev_cost (X, Y):
 def minkowski_cost (X, Y, p=3):
     return torch.linalg.vector_norm(X-Y, dim=-1, ord=p).flatten(start_dim=1)
 
+# Camera-ready additions: the remaining cost types of the v2 corpus (torot/data/cost.py), as functions of |x - y| on
+# [0, 1]. Constant factors (torot max-normalises each matrix) do not change the optimal plan. The costs above are unchanged.
+def sqrt_euclidean_cost (X, Y, eps=1e-8):
+    # |x - y|^(1/2), smoothed at 0 as (|x - y|^2 + eps)^(1/4) so that its gradient stays finite
+    return ((X-Y).square().sum(dim=-1) + eps).pow(0.25).flatten(start_dim=1)
+
+def cubic_euclidean_cost (X, Y):
+    return torch.linalg.vector_norm(X-Y, dim=-1).pow(3).flatten(start_dim=1)
+
+GAUSSIAN_SCALE = 0.2   # = torot.data.cost.GAUSSIAN_SCALE
+
+def gaussian_cost (X, Y):
+    return (1.0 - torch.exp(-(X-Y).square().sum(dim=-1) / (2.0 * GAUSSIAN_SCALE ** 2))).flatten(start_dim=1)
+
 def main_routine(X_sampler, Y_sampler, num_bins, rng, metric, max_steps=2501, verbose=False):
     
     #DEVICE_IDS = [2,1,0]
@@ -65,6 +79,12 @@ def main_routine(X_sampler, Y_sampler, num_bins, rng, metric, max_steps=2501, ve
         COST = chebyshev_cost
     elif metric == "minkowski":
         COST = minkowski_cost
+    elif metric == "sqrt_euclidean":
+        COST = sqrt_euclidean_cost
+    elif metric == "cubic_euclidean":
+        COST = cubic_euclidean_cost
+    elif metric == "gaussian":
+        COST = gaussian_cost
     else:
         raise ValueError("Unknown metric: {}".format(metric))
 

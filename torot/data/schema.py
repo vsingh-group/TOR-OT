@@ -44,9 +44,9 @@ Each record is one instance:
 | field | description |
 |---|---|
 | `n`, `m` | number of source / target bins |
-| `dim` | support dimension (1) |
+| `dim` | support dimension (1 or 2) |
 | `cost_type` | one of {cost_types} |
-| `coords_src`, `coords_tgt` | bin centres of a regular grid on [0,1], canonical order |
+| `coords_src`, `coords_tgt` | bin centres of a regular grid on [0,1]^dim, canonical order (2D: k x k grid, x-major) |
 | `a`, `b` | marginals (float64, sum to 1); for the random splits drawn by the `marginals` sampler of the generation config (`simplex`: uniform on the probability simplex, Dirichlet(1,…,1); `normalized_uniform`: normalised i.i.d. U(0,1) weights) |
 | `plan_rows`, `plan_cols`, `plan_vals` | COO of the optimal plan returned by POT's network simplex (`ot.emd`) |
 | `ot_cost` | optimal cost with the max-normalised cost matrix |
@@ -54,6 +54,20 @@ Each record is one instance:
 | `seed` | per-instance seed (instances are fully reproducible) |
 
 The cost matrix is not stored; it is `torot.data.cost.cost_matrix(coords_src, coords_tgt, cost_type)`.
+
+## Cost types
+
+`cost_type` holds the code name; the paper writes the costs as below. L2^p is the Euclidean distance to the power p
+(in 1D, L2 = |x - y|, which on a line also equals L1 and L∞). Each cost matrix is divided by its largest entry.
+
+| `cost_type` | paper | c(x, y) |
+|---|---|---|
+| `euclidean` | L2 | ‖x − y‖₂ |
+| `sqrt_euclidean` | L2^(1/2) | ‖x − y‖₂^(1/2) |
+| `sqeuclidean` | L2^2 | ‖x − y‖₂² |
+| `cubic_euclidean` | L2^3 | ‖x − y‖₂³ |
+| `canberra` | Canberra | Σ_d \\|x_d − y_d\\| / (\\|x_d\\| + \\|y_d\\|) |
+| `gaussian` | Gaussian | 1 − exp(−‖x − y‖₂² / 2σ²), σ = 0.2 |
 
 ## Splits
 

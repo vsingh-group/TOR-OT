@@ -98,9 +98,10 @@ a bin essentially never exceeds 3/n, while under Dirichlet(1) about 5 % of bins 
 n = 30). `--marginals normalized_uniform`
 reproduces that corpus exactly (its records are labelled `uniform_random`). The cost set differs from v1, where L1, L2, L∞ and Minkowski all collapse
 to |x − y| on a line (four of six "types" were the same problem). v2 uses six costs that are
-pairwise distinct in 1D (`torot/data/cost.py`): `sqeuclidean` |x−y|², `euclidean` |x−y|
-(non-unique optima), `canberra`, `sqrt_euclidean` |x−y|^½ (concave), `cubic_euclidean` |x−y|³,
-and `gaussian` 1 − exp(−|x−y|²/2σ²). The loader checks the corpus' cost names against this
+pairwise distinct in 1D (`torot/data/cost.py`; paper notation in parentheses, table in the
+[main README](../README.md#cost-types)): `euclidean` |x−y| (L₂; non-unique optima), `sqrt_euclidean` |x−y|^½
+(L₂^½; concave), `sqeuclidean` |x−y|² (L₂²), `cubic_euclidean` |x−y|³ (L₂³), `canberra` (Canberra) and
+`gaussian` 1 − exp(−|x−y|²/2σ²) (Gaussian). The loader checks the corpus' cost names against this
 list and refuses a corpus generated with another cost set. The only new axis is the support size, `n` ∈ [5, 100] per instance
 (`n = m`; `equal_sizes: false` in `GenConfig` samples them independently). One record
 holds a whole plan, not a row.

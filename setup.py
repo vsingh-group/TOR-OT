@@ -18,6 +18,6 @@ setuptools.setup(
     author_email="ivanjaenm@cs.wisc.edu",
     python_requires=">=3.11",
     install_requires=_parse_requirements("torot/requirements.txt"),
-    packages=setuptools.find_packages(exclude=("torot.tests",)),
+    packages=setuptools.find_packages(exclude=("torot.tests", "baselines", "baselines.*")),   # baselines run from the checkout
     package_data={"torot": ["configs/*.yaml"]},
 )

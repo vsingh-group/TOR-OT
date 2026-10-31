@@ -7,7 +7,14 @@ Example (CPU box):
         --train 2000000 --val 5000 --test_id 10000 --test_extrap 5000 \\
         --seed 0 --workers 16
 
-Instances: 1D regular grid, marginals drawn uniformly from the probability simplex
+2D corpus (``--dim 2``): k x k grids on [0, 1]^2 with k drawn uniformly from [side_min, side_max] (default 3..10,
+so n = 9..100 bins), test_extrap k = 11..14, test_ood = all ordered pairs of the seven named 2D distributions of the
+submission at k = 6 and 10:
+
+    python -m torot.data.generate --dim 2 --out_dir ./torot_data_2d --repo_id <user>/torot_data_2d --push \
+        --train 2000000 --val 2500 --test_id 5000 --test_extrap 5000 --seed 0 --workers 8
+
+Instances: regular grid (1D by default), marginals drawn uniformly from the probability simplex
 (``--marginals simplex``, the default) or with v1's normalised uniform weights
 (``--marginals normalized_uniform``, reproduces ``torot_data_1M_v2``), exact plan from POT's
 network simplex; the support size ``n`` varies per instance.
@@ -30,9 +37,9 @@ import ot
 from datasets import Dataset, DatasetDict
 
 from torot.data.cost import COST_TYPES, cost_matrix
-from torot.data.families import MARGINAL_SAMPLERS, NAMED_1D_FAMILIES, named_marginal
+from torot.data.families import MARGINAL_SAMPLERS, NAMED_1D_FAMILIES, NAMED_2D_FAMILIES, named_marginal, named_marginal_2d
 from torot.data.schema import DATASET_CARD_FRONT_MATTER, DATASET_CARD_TEMPLATE, FEATURES
-from torot.data.supports import grid_1d
+from torot.data.supports import grid_1d, grid_2d
 
 PLAN_EPS = 1e-12          # plan entries below this are numerical zeros
 FEASIBILITY_TOL = 1e-7    # discard instances whose plan violates the marginals by more
@@ -48,10 +55,19 @@ class GenConfig:
     marginals: str = "simplex"            # "simplex" (Dirichlet(1)) or "normalized_uniform" (v1 / torot_data_1M_v2)
     cost_types: List[str] = field(default_factory=lambda: list(COST_TYPES))
     ood_sizes: List[int] = field(default_factory=lambda: [30, 100])
+    # 2D (dim = 2): k x k grids, k drawn uniformly from [side_min, side_max]; n_min / n_max / ood_sizes are not used
+    dim: int = 1
+    side_min: int = 3
+    side_max: int = 10
+    extrap_side_min: int = 11
+    extrap_side_max: int = 14
+    ood_sides: List[int] = field(default_factory=lambda: [6, 10])
 
     def __post_init__(self) -> None:
         if self.marginals not in MARGINAL_SAMPLERS:
             raise ValueError(f"marginals must be one of {list(MARGINAL_SAMPLERS)}, got {self.marginals!r}")
+        if self.dim not in (1, 2):
+            raise ValueError(f"dim must be 1 or 2, got {self.dim}")
 
 
 # --------------------------------------------------------------------------- single instance
@@ -104,6 +120,14 @@ def _record(
 def make_random_instance(seed: int, cfg: GenConfig, extrapolate: bool = False) -> Optional[dict]:
     """One random instance, fully determined by ``seed`` and ``cfg``."""
     rng = np.random.default_rng(seed)
+    if cfg.dim == 2:
+        lo, hi = (cfg.extrap_side_min, cfg.extrap_side_max) if extrapolate else (cfg.side_min, cfg.side_max)
+        k = int(rng.integers(lo, hi + 1))
+        xs = grid_2d(k)
+        sample = MARGINAL_SAMPLERS[cfg.marginals]
+        a, b = sample(rng, k * k), sample(rng, k * k)
+        cost_type = cfg.cost_types[int(rng.integers(len(cfg.cost_types)))]
+        return _record(seed, xs, xs, a, b, cost_type, cfg.marginals, cfg.marginals)
     lo, hi = (cfg.extrap_n_min, cfg.extrap_n_max) if extrapolate else (cfg.n_min, cfg.n_max)
     n = int(rng.integers(lo, hi + 1))
     m = n if cfg.equal_sizes else int(rng.integers(lo, hi + 1))
@@ -115,9 +139,19 @@ def make_random_instance(seed: int, cfg: GenConfig, extrapolate: bool = False) -
 
 
 def make_ood_instances(cfg: GenConfig) -> Iterator[dict]:
-    """Evaluation only: all ordered pairs of the named 1D densities, per OOD size and cost type."""
-    names = list(NAMED_1D_FAMILIES)
+    """Evaluation only: all ordered pairs of the named 1D densities (2D: the named 2D distributions), per OOD size
+    (2D: grid side) and cost type."""
     seed = 0
+    if cfg.dim == 2:
+        names = list(NAMED_2D_FAMILIES)
+        for k, cost_type, (fa, fb) in itertools.product(cfg.ood_sides, cfg.cost_types, itertools.product(names, names)):
+            xs = grid_2d(k)
+            rec = _record(seed, xs, xs, named_marginal_2d(fa, k), named_marginal_2d(fb, k), cost_type, fa, fb)
+            seed += 1
+            if rec is not None:
+                yield rec
+        return
+    names = list(NAMED_1D_FAMILIES)
     for n, cost_type, (fa, fb) in itertools.product(cfg.ood_sizes, cfg.cost_types, itertools.product(names, names)):
         xs = grid_1d(n)
         rec = _record(seed, xs, xs, named_marginal(fa, xs), named_marginal(fb, xs), cost_type, fa, fb)
@@ -215,6 +249,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--no_ood", action="store_true", help="skip the named-density OOD evaluation split")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--workers", type=int, default=8)
+    p.add_argument("--dim", type=int, default=None, choices=[1, 2], help="support dimension (default: GenConfig.dim = 1)")
     p.add_argument("--marginals", default=None, choices=sorted(MARGINAL_SAMPLERS),
                    help="marginal sampler (default: GenConfig.marginals = simplex)")
     p.add_argument("--config_json", default=None, help="JSON file overriding GenConfig fields")
@@ -229,6 +264,8 @@ def main(argv: Optional[List[str]] = None) -> None:
             cfg = GenConfig(**{**dataclasses.asdict(cfg), **json.load(f)})
     if args.marginals is not None:
         cfg = dataclasses.replace(cfg, marginals=args.marginals)
+    if args.dim is not None:
+        cfg = dataclasses.replace(cfg, dim=args.dim)
 
     # disjoint seed ranges per split (each split reserves 2 seeds per requested instance)
     offsets = {"train": 0, "val": 2 * args.train, "test_id": 2 * (args.train + args.val)}

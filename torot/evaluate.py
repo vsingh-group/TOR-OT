@@ -26,11 +26,23 @@ from torot.tokenizer import PlanTokenizer
 
 
 def load_model(checkpoint: str, device: torch.device, use_ema: bool = True) -> tuple[ToROT, PlanTokenizer, object]:
-    cfg = load_config(os.path.join(os.path.dirname(checkpoint), "config.yaml"))
+    """Load a model from a training checkpoint (``<run>/best.pt``, next to its ``config.yaml``), from an exported
+    folder (``model.safetensors`` + ``config.yaml``, see reproduce/export_to_hub.py) or from a Hugging Face Hub
+    model repository id (e.g. ``ivanjaenm/torot-row-M-5M``, optionally ``repo@revision``)."""
+    if not os.path.exists(checkpoint) and "/" in checkpoint and not checkpoint.endswith(".pt"):   # Hub repo id
+        from huggingface_hub import snapshot_download
+        repo, _, revision = checkpoint.partition("@")
+        checkpoint = snapshot_download(repo, revision=revision or None, allow_patterns=["model.safetensors", "config.yaml"])
+    if os.path.isdir(checkpoint):                                 # exported weights (EMA)
+        from safetensors.torch import load_file
+        cfg = load_config(os.path.join(checkpoint, "config.yaml"))
+        state = load_file(os.path.join(checkpoint, "model.safetensors"), device=str(device))
+    else:
+        cfg = load_config(os.path.join(os.path.dirname(checkpoint), "config.yaml"))
+        state = torch.load(checkpoint, map_location=device)["ema" if use_ema else "model"]
     tok = PlanTokenizer(cfg.tokenizer.mantissa_digits, cfg.tokenizer.max_exponent)
     model = ToROT(cfg.model, tok.vocab_size).to(device)
-    ckpt = torch.load(checkpoint, map_location=device)
-    model.load_state_dict(ckpt["ema" if use_ema else "model"])
+    model.load_state_dict(state)
     model.eval()
     return model, tok, cfg
 
@@ -44,6 +56,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--max_len", type=int, default=2048)
     p.add_argument("--symmetric", action="store_true", help="transpose-averaged decoding (symmetry 6.1)")
+    p.add_argument("--last_row", choices=("remainder", "model"), default="remainder",
+                   help="row decoding: last row = remaining capacity (default) or decoded by the model")
     p.add_argument("--raw_weights", action="store_true", help="use the raw instead of the EMA weights")
     p.add_argument("--out", default=None, help="JSON file for aggregated and per-instance metrics")
     return p.parse_args(argv)
@@ -62,7 +76,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     for start in range(0, total, args.batch_size):
         instances = [data[i] for i in range(start, min(total, start + args.batch_size))]
         t0 = time.perf_counter()
-        plans = predict_plans(model, tok, instances, device, max_len=args.max_len, symmetric=args.symmetric)
+        plans = predict_plans(model, tok, instances, device, max_len=args.max_len, symmetric=args.symmetric,
+                              last_row=args.last_row)
         if device.type == "cuda":
             torch.cuda.synchronize()
         latency.append((time.perf_counter() - t0) / len(instances))
