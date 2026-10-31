@@ -257,6 +257,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 
 def main(argv: Optional[List[str]] = None) -> None:
+    if sys.platform == "darwin":
+        # macOS: the `datasets` worker pool forks by default, and a forked worker that calls Apple's multithreaded
+        # BLAS (Accelerate, used by the cost matrix) crashes with SIGSEGV. Start fresh worker processes instead;
+        # every record depends only on its seed, so the corpus is the same.
+        import multiprocess
+        multiprocess.set_start_method("spawn", force=True)
     args = parse_args(argv)
     cfg = GenConfig()
     if args.config_json:
