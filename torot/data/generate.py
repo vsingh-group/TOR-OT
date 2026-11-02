@@ -14,6 +14,10 @@ submission at k = 6 and 10:
     python -m torot.data.generate --dim 2 --out_dir ./torot_data_2d --repo_id <user>/torot_data_2d --push \
         --train 2000000 --val 2500 --test_id 5000 --test_extrap 5000 --seed 0 --workers 8
 
+Empty bins (``--empty_bins P``, off by default): each random marginal gets, with probability P, a fraction of its
+bins set to exactly 0 (``--empty_frac MIN MAX``, default 0.1 0.7), as in most named OOD distributions; Dirichlet
+marginals never have empty bins. See ``GenConfig`` and ``empty_bins``.
+
 Instances: regular grid (1D by default), marginals drawn uniformly from the probability simplex
 (``--marginals simplex``, the default) or with v1's normalised uniform weights
 (``--marginals normalized_uniform``, reproduces ``torot_data_1M_v2``), exact plan from POT's
@@ -62,15 +66,63 @@ class GenConfig:
     extrap_side_min: int = 11
     extrap_side_max: int = 14
     ood_sides: List[int] = field(default_factory=lambda: [6, 10])
+    # Empty bins (off by default; random splits only): each marginal independently, with probability
+    # empty_bins_prob, gets a fraction f ~ U(empty_frac_min, empty_frac_max) of its bins set to exactly 0 and is
+    # renormalised (at least one bin keeps mass). See ``empty_bins``. With 0 the corpus is unchanged.
+    empty_bins_prob: float = 0.0
+    empty_frac_min: float = 0.1
+    empty_frac_max: float = 0.7
 
     def __post_init__(self) -> None:
         if self.marginals not in MARGINAL_SAMPLERS:
             raise ValueError(f"marginals must be one of {list(MARGINAL_SAMPLERS)}, got {self.marginals!r}")
         if self.dim not in (1, 2):
             raise ValueError(f"dim must be 1 or 2, got {self.dim}")
+        if not 0.0 <= self.empty_bins_prob <= 1.0:
+            raise ValueError(f"empty_bins_prob must be in [0, 1], got {self.empty_bins_prob}")
+        if not 0.0 <= self.empty_frac_min <= self.empty_frac_max < 1.0:
+            raise ValueError(f"need 0 <= empty_frac_min <= empty_frac_max < 1, got {self.empty_frac_min}, {self.empty_frac_max}")
+
+
+EMPTY_FIELDS = ("empty_bins_prob", "empty_frac_min", "empty_frac_max")   # left out of the card when unused
 
 
 # --------------------------------------------------------------------------- single instance
+def empty_bins(rng: np.random.Generator, p: np.ndarray, coords: np.ndarray, cfg: GenConfig) -> tuple[np.ndarray, str]:
+    """Set k = round(f n) bins of the marginal ``p`` to exactly 0, f ~ U(empty_frac_min, empty_frac_max), k <= n - 1,
+    and renormalise. Which bins (one of three patterns, equally likely):
+
+    * ``random``: a uniformly random subset;
+    * ``blobs``: the bins farthest from 1-4 random Gaussian bumps (mass stays in a few regions, the rest is empty);
+    * ``holes``: the bins nearest to the bumps (empty regions inside the support).
+
+    Returns the new marginal and the suffix recorded in ``family_src`` / ``family_tgt`` ("+empty_<pattern>")."""
+    n = p.shape[0]
+    pattern = ("random", "blobs", "holes")[int(rng.integers(3))]
+    k = min(n - 1, int(round(rng.uniform(cfg.empty_frac_min, cfg.empty_frac_max) * n)))
+    if pattern == "random":
+        idx = rng.choice(n, size=k, replace=False)
+    else:
+        centres = rng.uniform(0.0, 1.0, size=(int(rng.integers(1, 5)), coords.shape[1]))
+        widths = rng.uniform(0.1, 0.4, size=centres.shape[0])
+        d2 = ((coords[:, None, :] - centres[None, :, :]) ** 2).sum(-1)
+        bumps = np.exp(-d2 / (2.0 * widths**2)).sum(1)
+        order = np.argsort(bumps, kind="stable")
+        idx = order[:k] if pattern == "blobs" else order[::-1][:k]
+    q = p.copy()
+    q[idx] = 0.0
+    if k == 0 or q.sum() <= 0.0:
+        return p, ""
+    return q / q.sum(), f"+empty_{pattern}"
+
+
+def _maybe_empty(rng: np.random.Generator, p: np.ndarray, coords: np.ndarray, cfg: GenConfig) -> tuple[np.ndarray, str]:
+    """``empty_bins`` with probability ``cfg.empty_bins_prob``; draws nothing from ``rng`` when it is 0."""
+    if cfg.empty_bins_prob <= 0.0 or rng.random() >= cfg.empty_bins_prob:
+        return p, ""
+    return empty_bins(rng, p, coords, cfg)
+
+
 def solve_instance(a: np.ndarray, b: np.ndarray, C: np.ndarray) -> Optional[tuple[np.ndarray, float]]:
     """Exact LP solution via POT's network simplex; None if the plan fails the sanity checks."""
     plan = ot.emd(a, b, C, numItermax=1_000_000)
@@ -127,7 +179,9 @@ def make_random_instance(seed: int, cfg: GenConfig, extrapolate: bool = False) -
         sample = MARGINAL_SAMPLERS[cfg.marginals]
         a, b = sample(rng, k * k), sample(rng, k * k)
         cost_type = cfg.cost_types[int(rng.integers(len(cfg.cost_types)))]
-        return _record(seed, xs, xs, a, b, cost_type, cfg.marginals, cfg.marginals)
+        a, sa = _maybe_empty(rng, a, xs, cfg)                       # after every other draw: same instance otherwise
+        b, sb = _maybe_empty(rng, b, xs, cfg)
+        return _record(seed, xs, xs, a, b, cost_type, cfg.marginals + sa, cfg.marginals + sb)
     lo, hi = (cfg.extrap_n_min, cfg.extrap_n_max) if extrapolate else (cfg.n_min, cfg.n_max)
     n = int(rng.integers(lo, hi + 1))
     m = n if cfg.equal_sizes else int(rng.integers(lo, hi + 1))
@@ -135,7 +189,9 @@ def make_random_instance(seed: int, cfg: GenConfig, extrapolate: bool = False) -
     sample = MARGINAL_SAMPLERS[cfg.marginals]
     a, b = sample(rng, n), sample(rng, m)
     cost_type = cfg.cost_types[int(rng.integers(len(cfg.cost_types)))]
-    return _record(seed, xs, xt, a, b, cost_type, cfg.marginals, cfg.marginals)
+    a, sa = _maybe_empty(rng, a, xs, cfg)
+    b, sb = _maybe_empty(rng, b, xt, cfg)
+    return _record(seed, xs, xt, a, b, cost_type, cfg.marginals + sa, cfg.marginals + sb)
 
 
 def make_ood_instances(cfg: GenConfig) -> Iterator[dict]:
@@ -252,6 +308,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--dim", type=int, default=None, choices=[1, 2], help="support dimension (default: GenConfig.dim = 1)")
     p.add_argument("--marginals", default=None, choices=sorted(MARGINAL_SAMPLERS),
                    help="marginal sampler (default: GenConfig.marginals = simplex)")
+    p.add_argument("--empty_bins", type=float, default=None, metavar="P",
+                   help="probability that a random marginal gets empty bins (default 0: none; see GenConfig)")
+    p.add_argument("--empty_frac", type=float, nargs=2, default=None, metavar=("MIN", "MAX"),
+                   help="range of the fraction of bins emptied (default 0.1 0.7)")
     p.add_argument("--config_json", default=None, help="JSON file overriding GenConfig fields")
     return p.parse_args(argv)
 
@@ -272,6 +332,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         cfg = dataclasses.replace(cfg, marginals=args.marginals)
     if args.dim is not None:
         cfg = dataclasses.replace(cfg, dim=args.dim)
+    if args.empty_bins is not None:
+        cfg = dataclasses.replace(cfg, empty_bins_prob=args.empty_bins)
+    if args.empty_frac is not None:
+        cfg = dataclasses.replace(cfg, empty_frac_min=args.empty_frac[0], empty_frac_max=args.empty_frac[1])
 
     # disjoint seed ranges per split (each split reserves 2 seeds per requested instance)
     offsets = {"train": 0, "val": 2 * args.train, "test_id": 2 * (args.train + args.val)}
@@ -291,12 +355,26 @@ def main(argv: Optional[List[str]] = None) -> None:
     dsd.save_to_disk(args.out_dir)
 
     splits_table = "\n".join(["| split | instances |", "|---|---|"] + [f"| `{k}` | {len(v)} |" for k, v in dsd.items()])
+    cfg_card = dataclasses.asdict(cfg)
+    if cfg.empty_bins_prob <= 0.0:                                 # unused: the card stays as before
+        cfg_card = {k: v for k, v in cfg_card.items() if k not in EMPTY_FIELDS}
     card = DATASET_CARD_TEMPLATE.format(
         cost_types=", ".join(f"`{c}`" for c in cfg.cost_types),
         splits_table=splits_table,
-        config_json=json.dumps(dataclasses.asdict(cfg), indent=2),
+        config_json=json.dumps(cfg_card, indent=2),
         command=" ".join(["python -m torot.data.generate"] + sys.argv[1:]),
     )
+    if cfg.empty_bins_prob > 0.0:
+        card += (
+            "\n## Empty bins\n\n"
+            f"In the random splits (train, val, test_id, test_extrap) each marginal independently, with probability "
+            f"{cfg.empty_bins_prob:g}, has a fraction f ~ U({cfg.empty_frac_min:g}, {cfg.empty_frac_max:g}) of its bins set "
+            "to exactly 0 and is renormalised (at least one bin keeps mass). The emptied bins are, with equal "
+            "probability, a uniformly random subset (`family_*` = `<sampler>+empty_random`), the bins farthest from "
+            "1-4 random Gaussian bumps (`+empty_blobs`), or the bins nearest to them (`+empty_holes`); see "
+            "`torot.data.generate.empty_bins`. Every other draw of an instance (support, marginals before emptying, "
+            "cost type) is the same as without empty bins.\n"
+        )
     with open(f"{args.out_dir}/README.md", "w") as f:
         f.write(DATASET_CARD_FRONT_MATTER + card)
 
