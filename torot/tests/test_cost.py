@@ -2,7 +2,7 @@ import itertools
 
 import numpy as np
 import pytest
-from datasets import ClassLabel, Dataset, Features, Sequence, Value
+from datasets import ClassLabel, Dataset, Features, Value
 
 from torot.data.cost import COST_TYPES, cost_matrix
 from torot.data.dataset import cost_label_map

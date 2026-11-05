@@ -1,5 +1,5 @@
-"""Setup for the ToR-OT package (v2 in ``torot/``; the legacy v1 code in ``TF4OT/`` is
-installed alongside but its pinned dependencies are listed in ``TF4OT/requirements.txt``)."""
+"""Setup for the ToR-OT package (``torot/``). The baselines run from the checkout with their own environments
+(``baselines/README.md``)."""
 
 import setuptools
 
@@ -14,7 +14,7 @@ setuptools.setup(
     name="torot",
     version="2.0.0",
     description="ToR-OT: Learning Optimal Transport Plans Via Autoregressive Token Regression",
-    author="Ivan Jaen Marquez, Takis Chytas, Vikas Singh (University of Wisconsin-Madison)",
+    author="Ivan Jaen Marquez, Sotirios Panagiotis Chytas, Vikas Singh (University of Wisconsin-Madison)",
     author_email="ivanjaenm@cs.wisc.edu",
     python_requires=">=3.11",
     install_requires=_parse_requirements("torot/requirements.txt"),

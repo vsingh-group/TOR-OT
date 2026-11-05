@@ -1,0 +1,60 @@
+# The paper's 1D model (157.6M parameters, row decoding; released as ivanjaenm/torot-1d): the recipe of its run
+# experiments/torot/row_M_5M, trained on 8 GPUs (8 x A100, about 24 h; batches are per GPU):
+#   torchrun --nproc_per_node 8 -m torot.train --config torot/configs/torot_1d.yaml
+# or detached: CONFIG=torot/configs/torot_1d.yaml torot/run_train.sh 0,1,2,3,4,5,6,7 experiments/torot/row_M_5M
+data:
+  repo_id: ivanjaenm/torot_data_5M
+  cache_dir: null
+  train_split: train
+  val_split: val
+  max_bins: 200
+  transpose_aug_prob: 0.5
+  residual_noise: 0.01
+  residual_leftover_prob: 0.25
+  residual_leftover_range:
+  - 1.0e-06
+  - 0.01
+  num_workers: 8
+tokenizer:
+  mantissa_digits: 4
+  max_exponent: 9
+model:
+  d_model: 768
+  n_heads: 12
+  enc_layers: 6
+  dec_layers: 12
+  d_ff: 2048
+  fourier_bands: 8
+  dropout: 0.0
+  max_seq_len: 4096
+  decoding: row
+loss:
+  digit_weight_decay: 0.5
+  exponent_weight: 1.0
+  ordinal_eps: 0.05
+  z_loss: 0.0001
+optim:
+  lr: 0.0001
+  betas:
+  - 0.9
+  - 0.95
+  weight_decay: 0.1
+  warmup_steps: 2000
+  max_steps: 203000
+  min_lr_ratio: 0.1
+  batch_size: 256
+  max_tokens: 32768
+  max_dec_tokens: 24576
+  grad_clip: 1.0
+  ema_decay: 0.999
+run:
+  out_dir: experiments/torot/row_M_5M
+  seed: 0
+  log_every: 50
+  val_every: 5000
+  val_batches: 20
+  val_decode_instances: 256
+  max_decode_len: 2048
+  bf16: true
+  compile: false
+  resume: null

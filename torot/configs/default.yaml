@@ -1,4 +1,4 @@
-# ToR-OT v2 default training configuration (~70M parameters).
+# ToR-OT default training configuration (~70M parameters).
 data:
   repo_id: ivanjaenm/torot_data_1M      # uniform-on-simplex marginals, six distinct 1D costs; a local save_to_disk directory also works
   cache_dir: null
@@ -6,6 +6,9 @@ data:
   val_split: val
   max_bins: 200
   transpose_aug_prob: 0.5
+  residual_noise: 0.01          # row decoding: noise on the remaining capacities, and small fake leftovers in
+  residual_leftover_prob: 0.25  # used-up columns, so the model tolerates its own slightly wrong earlier rows
+  residual_leftover_range: [1.0e-6, 0.01]
   num_workers: 8
 
 tokenizer:
@@ -21,6 +24,7 @@ model:
   fourier_bands: 8
   dropout: 0.0
   max_seq_len: 4096
+  decoding: row         # the paper's model ("plan": one sequence for the whole plan)
 
 loss:
   digit_weight_decay: 0.5
@@ -33,14 +37,12 @@ optim:
   betas: [0.9, 0.95]
   weight_decay: 0.1
   warmup_steps: 1000
-  max_steps: 50000      # ~17 epochs of the 1M corpus on 4 GPUs (~2.9K steps/epoch/GPU), ~6.5 h on A100s
+  max_steps: 50000
   min_lr_ratio: 0.1
   batch_size: 512       # max instances per device batch; the token budget below binds first
-  max_tokens: 65536     # padded decoder tokens per device batch: ~33 GB peak on A100-40GB at 70M params
-                        # (use 32768 on 24 GB GPUs: same tokens/s within ~12%, double max_steps)
-  max_dec_tokens: null  # cap on padded decoder tokens per forward pass: larger batches are split into
-                        # micro-batches with gradient accumulation (row mode: max_tokens counts encoder
-                        # tokens only, and one long row pads the whole batch)
+  max_tokens: 65536     # padded tokens per device batch (row decoding: encoder tokens; halve on 24 GB GPUs)
+  max_dec_tokens: 24576 # cap on padded decoder tokens per forward pass: larger batches are split into
+                        # micro-batches with gradient accumulation (one long row pads the whole batch)
   grad_clip: 1.0
   ema_decay: 0.999
 

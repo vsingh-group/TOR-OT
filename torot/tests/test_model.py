@@ -37,7 +37,8 @@ def make_instance(rng, n, m, cost_type=0):
 
 
 def tiny_model(tok):
-    cfg = ModelConfig(d_model=64, n_heads=4, enc_layers=1, dec_layers=2, d_ff=128, fourier_bands=4, max_seq_len=512)
+    cfg = ModelConfig(d_model=64, n_heads=4, enc_layers=1, dec_layers=2, d_ff=128, fourier_bands=4, max_seq_len=512,
+                      decoding="plan")
     return ToROT(cfg, tok.vocab_size)
 
 

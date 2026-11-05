@@ -1,3 +1,0 @@
-# Default tokenizer configuration
-num_exponent_digits: 2
-num_mantissa_digits: 6 

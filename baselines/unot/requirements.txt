@@ -1,0 +1,15 @@
+# Environment for the UNOT baseline (official PyTorch code, vendored in third_party/unot).
+#   conda create -y -n env_unot python=3.12
+#   conda run -n env_unot pip install -r baselines/unot/requirements.txt
+# Run the baseline from the repository root (python -m baselines.unot.train ...): it imports torot.data.cost
+# (numpy + POT only) from the checkout, so the TOR-OT package itself is not installed in this environment.
+# Versions from the official requirements.txt (torch 2.5.1, torchvision 0.20.1, numpy 2.2.1, wandb 0.19.1, tqdm 4.67.1);
+# only the packages the training code imports are listed.
+torch==2.5.1
+torchvision==0.20.1
+numpy==2.2.1
+scipy==1.14.1
+tqdm==4.67.1
+wandb==0.19.1
+POT==0.9.5
+pytest==8.3.3              # unit tests (baselines/tests)

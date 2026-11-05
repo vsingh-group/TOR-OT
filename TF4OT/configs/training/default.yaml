@@ -1,9 +1,0 @@
-# Default training configuration
-num_epochs: 100
-batch_size_per_device: 2  # per GPU
-learning_rate: 1e-4
-use_amp: false
-grad_accumulation: 1
-
-# Distributed training settings
-world_size: null  # Will use torch.cuda.device_count() if null 

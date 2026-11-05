@@ -38,8 +38,8 @@ class ModelConfig:
     fourier_bands: int = 8
     dropout: float = 0.0
     max_seq_len: int = 4096
-    decoding: str = "plan"              # "plan": one sequence per plan; "row": one sequence per row,
-                                        # conditioned on the remaining column capacities
+    decoding: str = "row"               # "row" (the paper's model): one sequence per row, conditioned on the remaining
+                                        # column capacities; "plan": one sequence for the whole plan
 
 
 @dataclass

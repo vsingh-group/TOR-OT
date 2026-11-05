@@ -1,0 +1,23 @@
+# Environment for the Meta OT baseline (official JAX code, vendored in third_party/meta_ot).
+#   conda create -y -n env_metaot python=3.10
+#   conda run -n env_metaot pip install -r baselines/metaot/requirements.txt
+# Run the baseline from the repository root (python -m baselines.metaot.train ...): it imports torot.data.cost
+# (numpy + POT only) from the checkout, so the TOR-OT package itself is not installed in this environment.
+# The official requirements.txt pins ott-jax==0.2.6, but the code needs >= 0.2.9 (see below); jax 0.4.30 runs it
+# (plus one alias, jnp.DeviceArray, restored at import time by baselines/metaot/train.py).
+--extra-index-url https://download.pytorch.org/whl/cpu
+jax[cuda12]==0.4.30
+nvidia-cudnn-cu12==9.10.2.21   # the cuDNN 9.1 pulled by jax 0.4.30 fails to initialise under NVIDIA driver 580 (CUDA 13); 9.x is ABI compatible
+flax==0.8.5
+optax==0.2.2
+ott-jax==0.2.9            # the official requirements.txt says 0.2.6, but the code imports ott.core.linear_problems (>= 0.2.8) and ott.core.initializers (>= 0.2.9)
+hydra-core==1.3.2
+numpy==1.26.4
+scipy==1.13.1
+POT==0.9.5
+ipython==8.25.0
+matplotlib==3.9.0
+pillow==10.4.0
+torch==2.3.1+cpu          # imported by the official data module (torchvision datasets); CPU build is enough
+torchvision==0.18.1+cpu
+pytest==8.3.3              # unit tests (baselines/tests)

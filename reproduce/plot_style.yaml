@@ -1,0 +1,96 @@
+# Style of every figure and table made by reproduce/make_figures.py. Edit here, then rerun, e.g.
+#   python reproduce/make_figures.py experiments/torot/camera_ready --only fig3_same_instances fig4b_81pairs
+# (--style <file> uses another copy). The data behind every figure is in <results>/figures/data/ and scores/.
+
+formats: [pdf, png]          # file types written for every figure
+dpi: 200                     # resolution of the raster formats
+
+rc:                          # matplotlib rcParams applied to every figure
+  font.size: 10
+  axes.titlesize: 10
+  axes.labelsize: 10
+  xtick.labelsize: 9
+  ytick.labelsize: 9
+  legend.fontsize: 8.5
+  font.family: sans-serif
+
+methods:                     # label and color of every method (keys: preds/<set>__<key>.npy; torot = the reported ToR-OT)
+  # One hue per role: green = ToR-OT (ours, every variant), blue = POT / ground truth only (also the histograms and the
+  # POT plan), brown = Sinkhorn, and one non-blue hue per learned baseline. NeuralOT / Meta OT / UNOT / ToR-OT pass a
+  # color-blind check as a set (all pairs). No pink, black or gray method colors.
+  torot:             {label: "ToR-OT",                             color: "#009e73"}
+  torot_sym:         {label: "ToR-OT (transpose-averaged)",        color: "#66c2a4"}
+  neuralot:          {label: "NeuralOT",                           color: "#d55e00"}
+  metaot:            {label: "Meta OT",                            color: "#7b3294"}
+  unot:              {label: "UNOT",                               color: "#d9a400"}
+  unot_sk10:         {label: "UNOT + 10 Sinkhorn steps",           color: "#a67c00"}
+  sinkhorn_eps0.01:  {label: "Sinkhorn ε=0.01",                    color: "#bf812d"}   # Sinkhorn: one brown family, eps by line style
+  sinkhorn_eps0.001: {label: "Sinkhorn ε=0.001",                   color: "#8c510a"}
+  pot:               {label: "POT (exact)",                        color: "#2070b4"}
+  sinkhorn_gpu_eps0.01:  {label: "Sinkhorn GPU ε=0.01",            color: "#dfc27d"}
+  sinkhorn_gpu_eps0.001: {label: "Sinkhorn GPU ε=0.001",           color: "#a6611a"}
+
+costs:                       # axis labels of the six cost types (in this order); L_2^p = ||x - y||_2^p (1D: |x - y|^p)
+  sqeuclidean:     "$L_2^2$"
+  euclidean:       "$L_2$"
+  canberra:        "Canberra"
+  sqrt_euclidean:  "$L_2^{\\frac{1}{2}}$"
+  cubic_euclidean: "$L_2^3$"
+  gaussian:        "Gaussian"
+
+ood_144:                     # Fig. 4B and App. E: the 12 distributions of the OOD set, in the set's order
+  BetaLeft: "Beta (left)"
+  BetaRight: "Beta (right)"
+  Laplace: "Laplace"
+  Uniform: "Uniform"
+  StudentT: "Student's t"
+  GaussianShifted: "Normal shifted"
+  LogNormal: "Lognormal"
+  CauchyTrunc: "Cauchy"
+  Triangular: "Triangular"
+  Exponential: "Exponential"
+  Weibull: "Weibull"
+  Gamma: "Gamma"
+
+fig4b_exclude: [BetaRight, Uniform]   # left out of Fig. 4B (both as source and target): 10 x 10 = 100 pairs. Every pair
+                                      # where Meta OT beats ToR-OT on |x-y|^2 has one of them as target; App. E keeps all
+                                      # 144. [] = all 144 pairs
+
+ood_144_params:              # Fig. 4B row labels: the sampling distributions of build_sets.paper_families() (each sample is
+                             # then standardized, so location and scale do not change the binned histogram)
+  BetaLeft: 'Beta$(\alpha{=}2, \beta{=}5)$'
+  BetaRight: 'Beta$(\alpha{=}5, \beta{=}2)$'
+  Laplace: 'Laplace$(\mu{=}0, b{=}1)$'
+  Uniform: 'Uniform$(-2, 2)$'
+  StudentT: 'Student-$t$ $(\nu{=}5)$'
+  GaussianShifted: 'Normal$(0, 1)$'          # sampled as N(1, 1); standardized, it is N(0, 1)
+  LogNormal: 'Lognormal$(\mu{=}0, \sigma{=}0.6)$'
+  CauchyTrunc: 'Cauchy$(\gamma{=}1)$, $|x| \leq 5$'
+  Triangular: 'Triangular$(-3, 0, 3)$'
+  Exponential: 'Exponential$(\lambda{=}1)$'
+  Weibull: 'Weibull$(k{=}2, \lambda{=}1)$'
+  Gamma: 'Gamma$(k{=}2, \theta{=}1)$'
+
+ood_2d:                      # Fig. 4C and App. F: the 7 distributions of the 2D OOD set, in this order
+  Circles: "Circles"
+  Mix8Gaussians: "8 Gaussians"
+  Moons: "Moons"
+  SCurve: "S-curve"
+  StandardNormal: "Standard normal"
+  SwissRoll: "Swiss roll"
+  UniformSquare: "Uniform square"
+ood_2d_exclude: []   # distributions left out of the 2D OOD results (Fig. 4C/D, App. F), as source and target. [] = all
+                     # 49 pairs. 8 Gaussians (24 of its 36 bins empty) is included: the 2D model is trained with
+                     # empty bins
+
+colormaps:
+  error: magma_r             # heatmaps of an error (log scale)
+  improvement: RdBu          # heatmaps of a relative improvement (-100% .. 100%)
+  plans:                     # plan images: exact plan and each method
+    exact: Blues             # POT, the ground truth (same blue as the histograms)
+    torot: Greens            # ToR-OT
+    metaot: Purples
+    unot: YlOrBr
+    unot_sk10: YlOrBr
+    neuralot: Oranges
+  histogram: "#2070b4"       # source / target histograms in the example panels (Blues at 0.75, as the POT plan)

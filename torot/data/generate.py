@@ -1,4 +1,4 @@
-"""Generate the ToR-OT v2 corpus and (optionally) push it to the Hugging Face Hub.
+"""Generate the ToR-OT corpus and (optionally) push it to the Hugging Face Hub.
 
 Example (CPU box):
 
@@ -8,8 +8,8 @@ Example (CPU box):
         --seed 0 --workers 16
 
 2D corpus (``--dim 2``): k x k grids on [0, 1]^2 with k drawn uniformly from [side_min, side_max] (default 3..10,
-so n = 9..100 bins), test_extrap k = 11..14, test_ood = all ordered pairs of the seven named 2D distributions of the
-submission at k = 6 and 10:
+so n = 9..100 bins), test_extrap k = 11..14, test_ood = all ordered pairs of the seven named 2D distributions
+at k = 6 and 10:
 
     python -m torot.data.generate --dim 2 --out_dir ./torot_data_2d --repo_id <user>/torot_data_2d --push \
         --train 2000000 --val 2500 --test_id 5000 --test_extrap 5000 --seed 0 --workers 8
@@ -19,8 +19,8 @@ bins set to exactly 0 (``--empty_frac MIN MAX``, default 0.1 0.7), as in most na
 marginals never have empty bins. See ``GenConfig`` and ``empty_bins``.
 
 Instances: regular grid (1D by default), marginals drawn uniformly from the probability simplex
-(``--marginals simplex``, the default) or with v1's normalised uniform weights
-(``--marginals normalized_uniform``, reproduces ``torot_data_1M_v2``), exact plan from POT's
+(``--marginals simplex``, the default) or normalised i.i.d. U(0, 1) weights
+(``--marginals normalized_uniform``), exact plan from POT's
 network simplex; the support size ``n`` varies per instance.
 Every instance is generated from its own seed, so any record can be regenerated
 independently of the number of workers or the chunking.
@@ -55,8 +55,8 @@ class GenConfig:
     n_max: int = 100
     extrap_n_min: int = 120               # support size range for test_extrap
     extrap_n_max: int = 200
-    equal_sizes: bool = True              # n == m as in v1; False samples n and m independently
-    marginals: str = "simplex"            # "simplex" (Dirichlet(1)) or "normalized_uniform" (v1 / torot_data_1M_v2)
+    equal_sizes: bool = True              # n == m; False samples n and m independently
+    marginals: str = "simplex"            # "simplex" (Dirichlet(1)) or "normalized_uniform" (normalised U(0, 1) weights)
     cost_types: List[str] = field(default_factory=lambda: list(COST_TYPES))
     ood_sizes: List[int] = field(default_factory=lambda: [30, 100])
     # 2D (dim = 2): k x k grids, k drawn uniformly from [side_min, side_max]; n_min / n_max / ood_sizes are not used

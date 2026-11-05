@@ -23,8 +23,8 @@ def test_normalized_uniform_is_not_uniform_on_the_simplex():
     assert np.mean(X > 3.0 / n) < 1e-3
 
 
-def test_normalized_uniform_reproduces_the_v1_sampler():
-    """Same random stream as v1 / torot_data_1M_v2: normalised i.i.d. U(0, 1) weights."""
+def test_normalized_uniform_sampler_stream():
+    """The normalized_uniform sampler draws normalised i.i.d. U(0, 1) weights from a fixed random stream."""
     a = normalized_uniform(np.random.default_rng(7), 25)
     w = np.random.default_rng(7).uniform(size=25)
     assert np.allclose(a, w / w.sum())

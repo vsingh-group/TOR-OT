@@ -1,5 +1,5 @@
-# ToR-OT v2 runtime dependencies (Python >= 3.11).
-# torch is installed from the default PyPI wheels (CUDA 12.x); see torot/README.md.
+# ToR-OT runtime dependencies (Python >= 3.11).
+# torch is installed from the default PyPI wheels (CUDA 12.x); see the Installation section of README.md.
 numpy>=1.26
 scipy>=1.11
 torch>=2.5

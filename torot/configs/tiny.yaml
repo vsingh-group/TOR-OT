@@ -6,6 +6,7 @@ model:
   dec_layers: 4
   d_ff: 384
   fourier_bands: 6
+  decoding: row
 
 optim:
   lr: 1.0e-3

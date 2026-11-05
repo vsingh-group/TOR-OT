@@ -259,7 +259,6 @@ class ToROT(nn.Module):
     def encode(self, batch: Dict[str, torch.Tensor]) -> EncoderOutput:
         a, b = batch["a"], batch["b"]
         B, n_pad = a.shape
-        m_pad = b.shape[1]
         src = (
             self.bin_type_emb.weight[0]
             + self.mass_proj(mass_features(a))

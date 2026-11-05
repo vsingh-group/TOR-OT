@@ -28,7 +28,7 @@ from torot.tokenizer import PlanTokenizer
 def load_model(checkpoint: str, device: torch.device, use_ema: bool = True) -> tuple[ToROT, PlanTokenizer, object]:
     """Load a model from a training checkpoint (``<run>/best.pt``, next to its ``config.yaml``), from an exported
     folder (``model.safetensors`` + ``config.yaml``, see reproduce/export_to_hub.py) or from a Hugging Face Hub
-    model repository id (e.g. ``ivanjaenm/torot-row-M-5M``, optionally ``repo@revision``)."""
+    model repository id (e.g. ``ivanjaenm/torot-1d``, optionally ``repo@revision``)."""
     if not os.path.exists(checkpoint) and "/" in checkpoint and not checkpoint.endswith(".pt"):   # Hub repo id
         from huggingface_hub import snapshot_download
         repo, _, revision = checkpoint.partition("@")

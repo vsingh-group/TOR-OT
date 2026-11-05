@@ -22,7 +22,7 @@ def grid_1d(n: int) -> np.ndarray:
 
 def grid_2d(k: int) -> np.ndarray:
     """``k x k`` bin centres of a regular grid on [0, 1]^2, shape [k*k, 2], in canonical order: x-major (index
-    i * k + j is the bin (x_i, y_j)), the row-major order of ``np.histogram2d`` and of the submission's 2D grids."""
+    i * k + j is the bin (x_i, y_j)), the row-major order of ``np.histogram2d``."""
     c = (np.arange(k, dtype=np.float64) + 0.5) / k
     xx, yy = np.meshgrid(c, c, indexing="ij")
     return np.stack([xx.ravel(), yy.ravel()], axis=1)
@@ -46,8 +46,11 @@ def set_coords(z) -> np.ndarray:
 
 
 def pad_coords(coords: np.ndarray, dim_out: int = COORD_DIM) -> np.ndarray:
-    """Right-pad coordinates with zeros to ``dim_out`` columns (1D instances become (x, 0))."""
+    """Right-pad coordinates with zeros to ``dim_out`` columns (1D instances become (x, 0)); a flat array of n
+    values is read as n points in 1D."""
     coords = np.asarray(coords, dtype=np.float64)
+    if coords.ndim == 1:
+        coords = coords[:, None]
     if coords.shape[1] == dim_out:
         return coords
     out = np.zeros((coords.shape[0], dim_out), dtype=np.float64)

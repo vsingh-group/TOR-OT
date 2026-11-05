@@ -1,4 +1,4 @@
-"""ToR-OT v2: token regression for optimal transport with an encoder-decoder transformer.
+"""ToR-OT: token regression for optimal transport with an encoder-decoder transformer.
 
 Package layout
 --------------

@@ -240,8 +240,8 @@ class Collator:
             ni, mi = inst["n"], inst["m"]
             a[i, :ni] = torch.from_numpy(inst["a"].astype(np.float32))
             b[i, :mi] = torch.from_numpy(inst["b"].astype(np.float32))
-            coords_src[i, :ni] = torch.from_numpy(inst["coords_src"]).float()
-            coords_tgt[i, :mi] = torch.from_numpy(inst["coords_tgt"]).float()
+            coords_src[i, :ni] = torch.from_numpy(pad_coords(inst["coords_src"])).float()   # 1D (x) -> (x, 0)
+            coords_tgt[i, :mi] = torch.from_numpy(pad_coords(inst["coords_tgt"])).float()
             src_mask[i, :ni] = True
             tgt_mask[i, :mi] = True
             n[i], m[i], cost_type[i] = ni, mi, inst["cost_type"]

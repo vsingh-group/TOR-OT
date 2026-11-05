@@ -1,0 +1,15 @@
+# NeuralOT baseline (env_neuralot, Python 3.11): the packages its code imports, at the versions used for the paper
+# (full snapshot: reproduce/envs/env_neuralot.freeze.txt). Run from the repository root, which provides torot/.
+torch==2.8.0
+torchvision==0.23.0
+numpy==2.4.6
+scipy==1.16.2
+scikit-learn==1.7.2
+POT==0.9.6.post1
+pandas==2.3.3
+h5py==3.15.1
+matplotlib==3.11.1
+seaborn==0.12.2
+pillow==11.3.0
+ipython==9.6.0
+tqdm==4.67.1

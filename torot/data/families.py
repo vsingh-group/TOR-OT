@@ -5,9 +5,8 @@ parametric family is assumed:
 
 * ``simplex`` (default): uniform on the probability simplex, i.e. Dirichlet(1, ..., 1)
   (equivalently: i.i.d. Exponential(1) weights, normalised).
-* ``normalized_uniform``: i.i.d. U(0, 1) weights normalised to sum to one. This is what v1
-  and the ``torot_data_1M_v2`` corpus used (labelled ``uniform_random`` there). It is *not*
-  uniform on the simplex: it concentrates near the centre (histograms stay close to flat; a bin
+* ``normalized_uniform``: i.i.d. U(0, 1) weights normalised to sum to one (an option, not used for the paper's
+  corpora). It is *not* uniform on the simplex: it concentrates near the centre (histograms stay close to flat; a bin
   essentially never exceeds 3/n, which ~5 % of bins do under Dirichlet(1) at n = 30).
 
 The named 1D densities below are used **only** for the out-of-distribution evaluation
@@ -44,7 +43,7 @@ def uniform_simplex(rng: np.random.Generator, n: int) -> np.ndarray:
 
 
 def normalized_uniform(rng: np.random.Generator, n: int) -> np.ndarray:
-    """v1 / ``torot_data_1M_v2`` marginal: i.i.d. U(0, 1) weights over ``n`` bins, normalised."""
+    """i.i.d. U(0, 1) weights over ``n`` bins, normalised."""
     return _normalise(rng.uniform(size=n))
 
 
@@ -83,8 +82,7 @@ def named_marginal(name: str, coords: np.ndarray) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- named 2D distributions (OOD evaluation only)
-# The seven 2D distributions of the submission's 2D evaluation (TF4OT/run_inference_2d.py,
-# eval_all_2d_distribution_pairs), with the same parameters: point clouds standardised per axis (except the standard
+# The seven 2D distributions of the 2D OOD evaluation: point clouds standardised per axis (except the standard
 # normal) and binned on [-2.5, 2.5]^2. The scikit-learn generators (make_swiss_roll / make_moons / make_circles /
 # make_s_curve) are re-implemented with NumPy from their definitions, so no scikit-learn dependency is needed.
 NAMED_2D_RANGE = (-2.5, 2.5)
@@ -158,7 +156,7 @@ NAMED_2D_FAMILIES: Dict[str, Callable[[np.random.Generator, int], np.ndarray]] =
 def named_marginal_2d(name: str, side: int) -> np.ndarray:
     """Deterministic histogram of a named 2D distribution on the ``side x side`` grid of ``supports.grid_2d``: a fixed
     seed per family, NAMED_2D_SAMPLES points binned on NAMED_2D_RANGE^2, flattened x-major. Mass outside the range is
-    dropped (as in the submission); empty bins stay empty."""
+    dropped; empty bins stay empty."""
     rng = np.random.default_rng(7_000_000 + list(NAMED_2D_FAMILIES).index(name))
     pts = NAMED_2D_FAMILIES[name](rng, NAMED_2D_SAMPLES)
     counts, _, _ = np.histogram2d(pts[:, 0], pts[:, 1], bins=[side, side], range=[NAMED_2D_RANGE, NAMED_2D_RANGE])
