@@ -1,5 +1,7 @@
 # ToR-OT: Learning Optimal Transport Plans Via Autoregressive Token Regression
 
+🌐 **Project page:** [vsingh-group.github.io/TOR-OT](https://vsingh-group.github.io/TOR-OT/)
+
 🤗 **Models:** [`torot-1d`](https://huggingface.co/ivanjaenm/torot-1d) · [`torot-2d`](https://huggingface.co/ivanjaenm/torot-2d) &nbsp;|&nbsp; 🤗 **Datasets:** [`torot_data_5M`](https://huggingface.co/datasets/ivanjaenm/torot_data_5M) · [`torot_data_4M_2d`](https://huggingface.co/datasets/ivanjaenm/torot_data_4M_2d) · [`torot_data_1M`](https://huggingface.co/datasets/ivanjaenm/torot_data_1M)
 
 ToR-OT (**To**ken **R**egression for **O**ptimal **T**ransport) casts discrete optimal transport as sequence generation: a transformer reads the two marginals and the cost and decodes the sparse optimal plan row by row as tokens.
