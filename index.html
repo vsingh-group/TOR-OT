@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ToR-OT: Learning Optimal Transport Plans Via Autoregressive Token Regression</title>
+  <meta name="description" content="ToR-OT is a Transformer that predicts sparse discrete optimal transport plans as token sequences. NeurIPS 2026.">
+  <meta property="og:title" content="Learning Optimal Transport Plans Via Autoregressive Token Regression">
+  <meta property="og:description" content="A Transformer that predicts sparse discrete optimal transport plans as token sequences. NeurIPS 2026.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://vsingh-group.github.io/TOR-OT/">
+  <meta property="og:image" content="https://vsingh-group.github.io/TOR-OT/resources/preview.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+
+  <!-- KaTeX renders the LaTeX math written between \( and \) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
+        integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"
+          integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+          integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"
+          onload="renderMathInElement(document.body, {delimiters: [{left: '\\(', right: '\\)', display: false}, {left: '\\[', right: '\\]', display: true}]});"></script>
+
+  <style>
+    body {
+      font-family: "HelveticaNeue-Light", "Helvetica Neue Light", "Helvetica Neue", Helvetica, Arial, "Lucida Grande", sans-serif;
+      font-weight: 300;
+      font-size: 18px;
+      line-height: 1.5;
+      color: #222;
+      background: #fff;
+      margin: 0 auto;
+      padding: 0 20px;
+      max-width: 1100px;
+    }
+    h1 { font-weight: 300; font-size: 32px; text-align: center; margin: 0 0 16px; }
+    a:link, a:visited { color: #1367a7; text-decoration: none; }
+    a:hover { color: #208799; }
+    hr { border: 0; height: 1px; margin: 36px 0;
+         background-image: linear-gradient(to right, rgba(0,0,0,0), rgba(0,0,0,0.75), rgba(0,0,0,0)); }
+
+    .title { font-size: 40px; text-align: center; line-height: 1.25; margin: 40px 0 10px; }
+    .venue { font-size: 24px; text-align: center; font-style: italic; margin: 0 0 24px; }
+    .authors { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 44px;
+               font-size: 22px; margin: 0 0 12px; }
+    .logo { display: block; height: 50px; width: auto; margin: 6px auto 22px; }
+    .links { font-size: 24px; text-align: center; margin: 0 0 28px; }
+    .links a { margin: 0 8px; white-space: nowrap; }
+    .links a.soon { color: #9aa3ab; cursor: default; }
+
+    .fig { display: block; margin: 0 auto; max-width: 100%; height: auto; }
+    .caption { font-size: 16px; text-align: justify; max-width: 900px; margin: 14px auto 0; }
+    .text { text-align: justify; max-width: 900px; margin: 0 auto; }
+    .text ul { margin: 12px 0 0; padding-left: 24px; }
+    .text li { margin-bottom: 6px; }
+
+    .bibtex-title { font-size: 22px; max-width: 900px; margin: 0 auto 8px; }
+    pre.bibtex { font-family: "Courier New", Courier, monospace; font-size: 17px; line-height: 1.45;
+                 background: #f6f6f6; border: 1px solid #ddd; border-radius: 4px;
+                 padding: 14px 16px; max-width: 868px; margin: 0 auto; overflow-x: auto; }
+    .footer { font-size: 16px; }
+    .katex { font-size: 1.05em; }
+    html { scroll-behavior: smooth; }
+    .cx p { margin: 0 0 12px; }
+    .table-wrap { overflow-x: auto; margin: 6px 0 16px; }
+    .cx-table { border-collapse: collapse; margin: 0 auto; font-size: 17px; }
+    .cx-table th, .cx-table td { padding: 7px 16px; text-align: center; white-space: nowrap; }
+    .cx-table th:first-child, .cx-table td:first-child { text-align: left; }
+    .cx-table thead th { font-weight: 400; border-top: 1.5px solid #222; border-bottom: 1px solid #222; }
+    .cx-table tbody tr:last-child td { border-bottom: 1.5px solid #222; }
+    .video { position: relative; max-width: 800px; aspect-ratio: 16 / 9; margin: 0 auto; }
+    .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: 4px; }
+    .video-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+                         background: #f6f6f6; border: 1px solid #ddd; border-radius: 4px; color: #777; font-size: 22px; }
+    .video-card { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+                  justify-content: center; gap: 14px; border: 1px solid #ddd; border-radius: 4px; overflow: hidden;
+                  background: #fff url("resources/preview.png") center / contain no-repeat; }
+    .video-card::before { content: ""; position: absolute; inset: 0; background: rgba(0, 0, 0, 0.38);
+                          transition: background 0.2s; }
+    .video-card:hover::before { background: rgba(0, 0, 0, 0.28); }
+    .video-card .play { position: relative; width: 84px; height: 84px; border-radius: 50%;
+                        background: rgba(0, 0, 0, 0.78); transition: transform 0.2s, background 0.2s; }
+    .video-card .play::after { content: ""; position: absolute; left: 32px; top: 26px; border-style: solid;
+                               border-width: 16px 0 16px 26px; border-color: transparent transparent transparent #fff; }
+    .video-card:hover .play { transform: scale(1.08); background: #C5050C; }
+    .video-card .label { position: relative; color: #fff; font-size: 19px; font-weight: 400;
+                         background: rgba(0, 0, 0, 0.78); padding: 5px 16px; border-radius: 999px; }
+
+    @media (max-width: 640px) {
+      body { font-size: 16px; }
+      .title { font-size: 28px; }
+      .venue { font-size: 20px; }
+      .authors { font-size: 18px; gap: 6px 24px; }
+      .links { font-size: 20px; }
+      h1 { font-size: 26px; }
+      .text, .caption { text-align: left; }
+      pre.bibtex { font-size: 14px; }
+    }
+  </style>
+</head>
+
+<body>
+
+  <div class="title">Learning Optimal Transport Plans<br>Via Autoregressive Token Regression</div>
+  <div class="venue">NeurIPS 2026</div>
+
+  <!-- To link an author's homepage, wrap the name: <a href="https://...">Name</a> -->
+  <div class="authors">
+    <span>Ivan Jaen Marquez</span>
+    <span>Sotirios Panagiotis Chytas</span>
+    <span>Vikas Singh</span>
+  </div>
+  <img class="logo" src="resources/uw-logo.svg" alt="University of Wisconsin&ndash;Madison logo">
+
+  <!-- [Paper] points to the local PDF. Swap in the arXiv link when you have one.
+       [OpenReview]: paste the forum link into href="" when the reviews are public, for example
+       href="https://openreview.net/forum?id=XXXXXXXXXX". Until then it shows in gray and does nothing. -->
+  <div class="links">
+    <a href="resources/paper.pdf">[Paper]</a>
+    <a href="">[OpenReview]</a>
+    <a href="https://github.com/vsingh-group/TOR-OT">[Code]</a>
+    <a href="https://huggingface.co/ivanjaenm/torot-1d">[Model]</a>
+    <a id="video-link" href="#video">[Video]</a>
+    <a href="resources/torot2026.bib" download="torot2026.bib">[Bibtex]</a>
+  </div>
+
+  <img class="fig" src="resources/architecture.gif" alt="Animated ToR-OT architecture: a set encoder reads the source and target histograms and the cost type; a Transformer decoder emits each row of the plan as tokens, filling the predicted plan row by row." style="width: 1050px;">
+  <p class="caption">
+    ToR-OT generates the plan one row at a time, and each row is conditioned on the previous rows. For row
+    \(i\), a set encoder embeds the cost type, the source bins \(i, \dots, n\), and every target bin \(j\)
+    with its capacity after the previous rows, \({r_j = \nu_j - \textstyle\sum_{i' &lt; i} \hat{\pi}_{i'j}}\).
+    A causal Transformer decoder then emits the nonzero entries of the row. Each entry is six tokens: a pointer
+    to a target bin, an exponent, and four mantissa digits.
+  </p>
+
+  <hr>
+
+  <!-- VIDEO. When the video is online, paste its link into data-video below, for example
+       data-video="https://slideslive.com/39012345/learning-optimal-transport-plans". SlidesLive does not
+       allow NeurIPS videos to be embedded on other sites, so the box becomes a thumbnail that opens the
+       video, and [Video] at the top links straight to it. A YouTube link is embedded in the page instead.
+       Left empty, the box says "Video coming soon". -->
+  <h1 id="video">Video</h1>
+  <div class="video" id="video-frame" data-video="">
+    <div class="video-placeholder">Video coming soon</div>
+  </div>
+
+  <hr>
+
+  <h1>Abstract</h1>
+  <div class="text">
+    Optimal Transport (OT) provides a principled framework for finding the minimum cost coupling between
+    probability distributions. Classical solvers remain the gold standard for this task. At the same time, OT is
+    an ideal testbed for studying whether learning-based amortized models can internalize the structure of OT
+    type problems. Here, ground-truth solutions are available and marginal constraints are explicitly defined.
+    Also, exact discrete solutions have well-characterized sparsity. We describe <b>ToR-OT</b>, a
+    transformer-based model that learns to predict discrete OT plans through autoregressive token regression.
+    We reframe OT into a structured sequence generation task. ToR-OT decodes sparse transport plans as
+    sequences instead of solving an optimization task at test time. We focus on three properties:
+    (a) <i>Zero-shot generalization</i>: pretraining on a large synthetic corpus of OT instances allows a single
+    model to generalize to unseen distribution pairs and heterogeneous cost metrics without retraining,
+    (b) <i>Sparse primal decoding</i>: by exploiting the inherent sparsity in exact discrete OT solutions, the
+    decoder predicts only nonzero entries (avoids dense coupling outputs),
+    (c) <i>Amortized inference</i>: on low-dimensional discrete problems, ToR-OT gives accurate approximate
+    plans and compares favorably with per-instance neural OT baselines. Overall, ToR-OT is not yet a
+    replacement for classical solvers, but a step toward understanding how autoregressive transformers can
+    learn structure of constrained optimization problems like OT.
+  </div>
+
+  <hr>
+
+  <h1>Discrete Optimal Transport</h1>
+  <img class="fig" src="resources/ot_instance.png" alt="A toy discrete optimal transport problem: source and target histograms, the sparse optimal plan, and the cost matrix." style="width: 560px;">
+  <p class="caption">
+    A discrete OT instance: source and target measures, the cost matrix \(C\), and the optimal plan \(\pi^*\).
+    An optimal plan exists with at most \(n + m - 1\) nonzeros, so ToR-OT predicts only the
+    nonzero entries, and a full plan takes \(O(n + m)\) tokens instead of \(nm\) entries.
+  </p>
+
+  <hr>
+
+  <h1>Results on 1D Distributions</h1>
+  <img class="fig" src="resources/results_1d.png" alt="Bar charts of MAPE for NeuralOT, UNOT, Meta OT and ToR-OT on six cost types, for the test set and the out-of-distribution set, with example source and target histograms and predicted plans." style="width: 1000px;">
+  <p class="caption">
+    Test set (top row) and out-of-distribution set (bottom row) at \(n = m = 30\) bins. Left: mean
+    absolute percentage error (MAPE) of each method on six cost types, each scored against the solution of the
+    problem it solves. A single ToR-OT model has the lowest mean error on every cost: 64&ndash;95% below
+    Meta OT, the strongest baseline, on the test set, and 60&ndash;75% below it on the OOD set. Right: an
+    example pair with the exact plan from POT and the plan predicted by ToR-OT.
+  </p>
+
+  <hr>
+
+  <h1>Feasibility and Out-of-Distribution Pairs</h1>
+  <img class="fig" src="resources/feasibility_ood.png" alt="Panel A: box plots of row and column marginal violations. Panels B and C: heatmaps of per-pair improvement over Meta OT in 1D and 2D. Panel D: mean MAPE of every method on the 2D sets." style="width: 1000px;">
+  <p class="caption">
+    <b>(A)</b> Marginal violations on the test set, with no hard constraint enforcement: the median is about
+    0.1% of the total mass, and no instance exceeds 1%.
+    <b>(B)</b> Relative MAPE improvement over Meta OT under the \(\ell_2^2\) cost, for 100 of
+    the 144 pairs of 1D OOD distributions. Over all 144 pairs, ToR-OT is more accurate on 134, with a median
+    improvement of 91%. Columns: 1 Beta, 2 Laplace, 3 Student's t, 4 Normal, 5 Lognormal, 6 Cauchy,
+    7 Triangular, 8 Exponential, 9 Weibull, 10 Gamma.
+    <b>(C)</b> The same for all 49 pairs of 2D OOD distributions; ToR-OT is more accurate on every pair, with
+    a median improvement of 93%. Columns: 1' Circles, 2' 8 Gaussians, 3' Moons, 4' S-curve,
+    5' Standard normal, 6' Swiss roll, 7' Uniform square.
+    <b>(D)</b> Mean MAPE of every method on the 2D test and OOD sets.
+  </p>
+
+  <hr>
+
+  <h1>Results on 2D Distributions</h1>
+  <img class="fig" src="resources/results_2d.png" alt="A 2D example: Swiss roll source and standard normal target on a 6 by 6 grid, the cost matrix, and the plans from POT, ToR-OT, NeuralOT and Meta OT." style="width: 1000px;">
+  <p class="caption">
+    A 2D OOD pair (Swiss roll &rarr; Standard normal, \(\ell_2^2\) cost) on a \(6 \times 6\)
+    grid, with the plans over the 36 flattened bins. The 2D model uses the same architecture and training
+    recipe as the 1D model; each bin is embedded from its 2D coordinate. ToR-OT's plan follows the sparse
+    structure of the exact plan.
+  </p>
+
+  <hr>
+
+  <h1>Decoding Complexity</h1>
+  <div class="text cx">
+    <p>
+      Let \(K_i\) be the number of nonzero entries in row \(i\) of the plan. Row \(i\) is decoded as
+      \(6K_i + 2\) tokens: six per entry, plus BOS and EOS. An optimal plan exists with at most
+      \(n + m - 1\) nonzeros, so \(\sum_i K_i \le n + m - 1\), and the whole plan takes
+      \[ \sum_{i=1}^{n} \left(6K_i + 2\right) \;=\; 6\sum_{i=1}^{n} K_i + 2n \;=\; O(n + m) \]
+      tokens, instead of the \(nm\) entries of a dense plan.
+    </p>
+    <p>
+      Self-attention over row \(i\) costs \(O(K_i^2)\), so row-wise decoding costs \(O\big(\sum_i K_i^2\big)\).
+      The total number of nonzeros is always \(O(n + m)\), but how they spread over the rows sets the cost.
+      For \(n = m\):
+    </p>
+    <div class="table-wrap">
+      <table class="cx-table">
+        <thead>
+          <tr><th>Sparsity pattern</th><th>Tokens \(\sum_i K_i\)</th><th>Self-attention \(\sum_i K_i^2\)</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Typical, short rows: \(K_i = O(1)\)</td><td>\(O(n)\)</td><td>\(O(n)\), linear</td></tr>
+          <tr><td>Worst case, one dense row: \(K_1 = O(n)\), \(K_{i &gt; 1} = O(1)\)</td><td>\(O(n)\)</td><td>\(O(n^2)\)</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Optimal plans are sparse and their rows stay short in practice, so the inference cost is dominated by
+      the model's fixed per-token cost, not by the quadratic size of the dense plan.
+    </p>
+  </div>
+
+  <hr>
+
+  <h1>Amortized Runtime</h1>
+  <img class="fig" src="resources/runtime.png" alt="Amortized time per problem for ToR-OT, including training, falls below NeuralOT's constant per-problem time after about 100 problems." style="width: 760px;">
+  <p class="caption">
+    Amortized time per problem, with ToR-OT's pretraining cost spread over the number of problems solved.
+    NeuralOT trains a new network for every pair (about 2,600 s each), while ToR-OT generates a plan in
+    1.09 s on one A100 GPU. Counting training time, ToR-OT becomes cheaper than NeuralOT after fewer than
+    100 problems. This is evidence for amortization relative to per-instance neural baselines, not a replacement
+    for classical OT solvers.
+  </p>
+
+  <hr>
+
+  <div class="bibtex-title">Bibtex</div>
+<pre class="bibtex">@inproceedings{jaenmarquez2026torot,
+  title={Learning Optimal Transport Plans Via Autoregressive Token Regression},
+  author={Jaen Marquez, Ivan and Chytas, Sotirios Panagiotis and Singh, Vikas},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2026}
+}</pre>
+
+  <hr>
+
+  <h1>Acknowledgements</h1>
+  <div class="text footer">
+    <p>Marquez, Chytas and Singh were supported in part by NIH R01 AG092220.</p>
+    <p>
+      The template of this project webpage was originally made by
+      <a href="http://web.mit.edu/phillipi/">Phillip Isola</a> and
+      <a href="http://richzhang.github.io/">Richard Zhang</a> for a
+      <a href="http://richzhang.github.io/colorization/">colorful</a> ECCV project; the code can be found
+      <a href="https://github.com/richzhang/webpage-template">here</a>.
+    </p>
+  </div>
+  <br>
+
+  <script>
+    // Top links with an empty href are not ready yet (e.g. OpenReview): gray, not clickable.
+    document.querySelectorAll('.links a[href=""]').forEach(function (a) {
+      a.classList.add("soon");
+      a.title = "Available once the reviews are public";
+      a.addEventListener("click", function (e) { e.preventDefault(); });
+    });
+
+    // Video section: embed the link in data-video (see the VIDEO comment above).
+    (function () {
+      var box = document.getElementById("video-frame");
+      var url = (box.getAttribute("data-video") || "").trim();
+      if (!url) return;
+      var m = url.match(/(?:youtu\.be\/|youtube(?:-nocookie)?\.com\/(?:watch\?(?:.*&)?v=|embed\/|shorts\/|live\/))([\w-]{11})/);
+      var el;
+      if (m) {
+        el = document.createElement("iframe");
+        el.src = "https://www.youtube-nocookie.com/embed/" + m[1];
+        el.title = "ToR-OT presentation video";
+        el.allow = "accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share";
+        el.allowFullscreen = true;
+      } else {
+        // SlidesLive (NeurIPS) and most other hosts refuse to be embedded here: link out instead
+        var host = "the video page";
+        try { host = /(^|\.)slideslive\./.test(new URL(url).hostname) ? "SlidesLive" : new URL(url).hostname.replace(/^www\./, ""); } catch (e) {}
+        el = document.createElement("a");
+        el.className = "video-card";
+        el.href = url; el.target = "_blank"; el.rel = "noopener";
+        el.innerHTML = '<span class="play"></span><span class="label"></span>';
+        el.querySelector(".label").textContent = "Watch on " + host;
+        var top = document.getElementById("video-link");
+        top.href = url; top.target = "_blank"; top.rel = "noopener";
+      }
+      box.replaceChildren(el);
+    })();
+  </script>
+
+</body>
+</html>
