@@ -1,12 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="utf-8">
+  <!-- Google Analytics (GA4 property "ToR-OT project page"). It only reports visits on the live site,
+       so previews on localhost are not counted. -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-DC71E4B6RR"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag() { dataLayer.push(arguments); }
+    gtag('js', new Date());
+    if (location.hostname === "vsingh-group.github.io") gtag('config', 'G-DC71E4B6RR');
+  </script>
+
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ToR-OT: Learning Optimal Transport Plans Via Autoregressive Token Regression</title>
-  <meta name="description" content="ToR-OT is a Transformer that predicts sparse discrete optimal transport plans as token sequences. NeurIPS 2026.">
+  <meta name="description"
+    content="ToR-OT is a Transformer that predicts sparse discrete optimal transport plans as token sequences. NeurIPS 2026.">
   <meta property="og:title" content="Learning Optimal Transport Plans Via Autoregressive Token Regression">
-  <meta property="og:description" content="A Transformer that predicts sparse discrete optimal transport plans as token sequences. NeurIPS 2026.">
+  <meta property="og:description"
+    content="A Transformer that predicts sparse discrete optimal transport plans as token sequences. NeurIPS 2026.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://vsingh-group.github.io/TOR-OT/">
   <meta property="og:image" content="https://vsingh-group.github.io/TOR-OT/resources/preview.png">
@@ -16,12 +29,13 @@
 
   <!-- KaTeX renders the LaTeX math written between \( and \) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css"
-        integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
+    integrity="sha384-n8MVd4RsNIU0tAv4ct0nTaAbDJwPJzDEaqSD1odI+WdtXRGWt2kTvGFasHpSy3SV" crossorigin="anonymous">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"
-          integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8" crossorigin="anonymous"></script>
+    integrity="sha384-XjKyOOlGwcjNTAIQHIpgOno0Hl1YQqzUOEleOLALmuqehneUG+vnGctmUb0ZY0l8"
+    crossorigin="anonymous"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
-          integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"
-          onload="renderMathInElement(document.body, {delimiters: [{left: '\\(', right: '\\)', display: false}, {left: '\\[', right: '\\]', display: true}]});"></script>
+    integrity="sha384-+VBxd3r6XgURycqtZ117nYw44OOcIax56Z4dCRWbxyPt0Koah1uHoK0o4+/RRE05" crossorigin="anonymous"
+    onload="renderMathInElement(document.body, {delimiters: [{left: '\\(', right: '\\)', display: false}, {left: '\\[', right: '\\]', display: true}]});"></script>
 
   <style>
     body {
@@ -35,68 +49,327 @@
       padding: 0 20px;
       max-width: 1100px;
     }
-    h1 { font-weight: 300; font-size: 32px; text-align: center; margin: 0 0 16px; }
-    a:link, a:visited { color: #1367a7; text-decoration: none; }
-    a:hover { color: #208799; }
-    hr { border: 0; height: 1px; margin: 36px 0;
-         background-image: linear-gradient(to right, rgba(0,0,0,0), rgba(0,0,0,0.75), rgba(0,0,0,0)); }
 
-    .title { font-size: 40px; text-align: center; line-height: 1.25; margin: 40px 0 10px; }
-    .venue { font-size: 24px; text-align: center; font-style: italic; margin: 0 0 24px; }
-    .authors { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 44px;
-               font-size: 22px; margin: 0 0 12px; }
-    .logo { display: block; height: 50px; width: auto; margin: 6px auto 22px; }
-    .links { font-size: 24px; text-align: center; margin: 0 0 28px; }
-    .links a { margin: 0 8px; white-space: nowrap; }
-    .links a.soon { color: #9aa3ab; cursor: default; }
+    h1 {
+      font-weight: 300;
+      font-size: 32px;
+      text-align: center;
+      margin: 0 0 16px;
+    }
 
-    .fig { display: block; margin: 0 auto; max-width: 100%; height: auto; }
-    .caption { font-size: 16px; text-align: justify; max-width: 900px; margin: 14px auto 0; }
-    .text { text-align: justify; max-width: 900px; margin: 0 auto; }
-    .text ul { margin: 12px 0 0; padding-left: 24px; }
-    .text li { margin-bottom: 6px; }
+    a:link,
+    a:visited {
+      color: #1367a7;
+      text-decoration: none;
+    }
 
-    .bibtex-title { font-size: 22px; max-width: 900px; margin: 0 auto 8px; }
-    pre.bibtex { font-family: "Courier New", Courier, monospace; font-size: 17px; line-height: 1.45;
-                 background: #f6f6f6; border: 1px solid #ddd; border-radius: 4px;
-                 padding: 14px 16px; max-width: 868px; margin: 0 auto; overflow-x: auto; }
-    .footer { font-size: 16px; }
-    .katex { font-size: 1.05em; }
-    html { scroll-behavior: smooth; }
-    .cx p { margin: 0 0 12px; }
-    .table-wrap { overflow-x: auto; margin: 6px 0 16px; }
-    .cx-table { border-collapse: collapse; margin: 0 auto; font-size: 17px; }
-    .cx-table th, .cx-table td { padding: 7px 16px; text-align: center; white-space: nowrap; }
-    .cx-table th:first-child, .cx-table td:first-child { text-align: left; }
-    .cx-table thead th { font-weight: 400; border-top: 1.5px solid #222; border-bottom: 1px solid #222; }
-    .cx-table tbody tr:last-child td { border-bottom: 1.5px solid #222; }
-    .video { position: relative; max-width: 800px; aspect-ratio: 16 / 9; margin: 0 auto; }
-    .video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: 4px; }
-    .video-placeholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-                         background: #f6f6f6; border: 1px solid #ddd; border-radius: 4px; color: #777; font-size: 22px; }
-    .video-card { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
-                  justify-content: center; gap: 14px; border: 1px solid #ddd; border-radius: 4px; overflow: hidden;
-                  background: #fff url("resources/preview.png") center / contain no-repeat; }
-    .video-card::before { content: ""; position: absolute; inset: 0; background: rgba(0, 0, 0, 0.38);
-                          transition: background 0.2s; }
-    .video-card:hover::before { background: rgba(0, 0, 0, 0.28); }
-    .video-card .play { position: relative; width: 84px; height: 84px; border-radius: 50%;
-                        background: rgba(0, 0, 0, 0.78); transition: transform 0.2s, background 0.2s; }
-    .video-card .play::after { content: ""; position: absolute; left: 32px; top: 26px; border-style: solid;
-                               border-width: 16px 0 16px 26px; border-color: transparent transparent transparent #fff; }
-    .video-card:hover .play { transform: scale(1.08); background: #C5050C; }
-    .video-card .label { position: relative; color: #fff; font-size: 19px; font-weight: 400;
-                         background: rgba(0, 0, 0, 0.78); padding: 5px 16px; border-radius: 999px; }
+    a:hover {
+      color: #208799;
+    }
+
+    hr {
+      border: 0;
+      height: 1px;
+      margin: 36px 0;
+      background-image: linear-gradient(to right, rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0));
+    }
+
+    .title {
+      font-size: 40px;
+      text-align: center;
+      line-height: 1.25;
+      margin: 40px 0 10px;
+    }
+
+    .venue {
+      font-size: 24px;
+      text-align: center;
+      font-style: italic;
+      margin: 0 0 24px;
+    }
+
+    .authors {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px 44px;
+      font-size: 22px;
+      margin: 0 0 12px;
+    }
+
+    .logo {
+      display: block;
+      height: 50px;
+      width: auto;
+      margin: 6px auto 22px;
+    }
+
+    .links {
+      font-size: 24px;
+      text-align: center;
+      margin: 0 0 28px;
+    }
+
+    .links a {
+      margin: 0 8px;
+      white-space: nowrap;
+    }
+
+    .links a.soon {
+      color: #9aa3ab;
+      cursor: default;
+    }
+
+    .tldr {
+      font-size: 20px;
+      text-align: justify;
+      max-width: 868px;
+      margin: 0 auto 32px;
+      padding: 14px 18px;
+      background: #f3faf7;
+      border-left: 4px solid #009E73;
+      border-radius: 0 4px 4px 0;
+    }
+
+    .tldr b {
+      font-weight: 600;
+      color: #04342C;
+    }
+
+    .fig {
+      display: block;
+      margin: 0 auto;
+      max-width: 100%;
+      height: auto;
+    }
+
+    /* A figure allowed to be wider than the text column, centered on the page,
+       but never wider than the window (minus the page's 20px side padding). */
+    .fig-wide {
+      position: relative;
+      left: 50%;
+      transform: translateX(-50%);
+      max-width: calc(100vw - 40px);
+    }
+
+    .caption {
+      font-size: 16px;
+      text-align: justify;
+      max-width: 900px;
+      margin: 14px auto 0;
+    }
+
+    .text {
+      text-align: justify;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .text ul {
+      margin: 12px 0 0;
+      padding-left: 24px;
+    }
+
+    .text li {
+      margin-bottom: 6px;
+    }
+
+    .bibtex-title {
+      font-size: 22px;
+      max-width: 900px;
+      margin: 0 auto 8px;
+    }
+
+    pre.bibtex {
+      font-family: "Courier New", Courier, monospace;
+      font-size: 16px;
+      line-height: 1.45;
+      background: #f6f6f6;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 14px 16px;
+      max-width: 868px;
+      margin: 0 auto;
+      overflow-x: auto;
+    }
+
+    .footer {
+      font-size: 16px;
+    }
+
+    .katex {
+      font-size: 1.05em;
+    }
+
+    html {
+      scroll-behavior: smooth;
+    }
+
+    .cx p {
+      margin: 0 0 12px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      margin: 6px 0 16px;
+    }
+
+    .cx-table {
+      border-collapse: collapse;
+      margin: 0 auto;
+      font-size: 17px;
+    }
+
+    .cx-table th,
+    .cx-table td {
+      padding: 7px 16px;
+      text-align: center;
+      white-space: nowrap;
+    }
+
+    .cx-table th:first-child,
+    .cx-table td:first-child {
+      text-align: left;
+    }
+
+    .cx-table thead th {
+      font-weight: 400;
+      border-top: 1.5px solid #222;
+      border-bottom: 1px solid #222;
+    }
+
+    .cx-table tbody tr:last-child td {
+      border-bottom: 1.5px solid #222;
+    }
+
+    .video {
+      position: relative;
+      max-width: 800px;
+      aspect-ratio: 16 / 9;
+      margin: 0 auto;
+    }
+
+    .video iframe {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      border: 0;
+      border-radius: 4px;
+    }
+
+    .video-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f6f6f6;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      color: #777;
+      font-size: 22px;
+    }
+
+    .video-card {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      overflow: hidden;
+      background: #fff url("resources/preview.png") center / contain no-repeat;
+    }
+
+    .video-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.38);
+      transition: background 0.2s;
+    }
+
+    .video-card:hover::before {
+      background: rgba(0, 0, 0, 0.28);
+    }
+
+    .video-card .play {
+      position: relative;
+      width: 84px;
+      height: 84px;
+      border-radius: 50%;
+      background: rgba(0, 0, 0, 0.78);
+      transition: transform 0.2s, background 0.2s;
+    }
+
+    .video-card .play::after {
+      content: "";
+      position: absolute;
+      left: 32px;
+      top: 26px;
+      border-style: solid;
+      border-width: 16px 0 16px 26px;
+      border-color: transparent transparent transparent #fff;
+    }
+
+    .video-card:hover .play {
+      transform: scale(1.08);
+      background: #C5050C;
+    }
+
+    .video-card .label {
+      position: relative;
+      color: #fff;
+      font-size: 19px;
+      font-weight: 400;
+      background: rgba(0, 0, 0, 0.78);
+      padding: 5px 16px;
+      border-radius: 999px;
+    }
 
     @media (max-width: 640px) {
-      body { font-size: 16px; }
-      .title { font-size: 28px; }
-      .venue { font-size: 20px; }
-      .authors { font-size: 18px; gap: 6px 24px; }
-      .links { font-size: 20px; }
-      h1 { font-size: 26px; }
-      .text, .caption { text-align: left; }
-      pre.bibtex { font-size: 14px; }
+      body {
+        font-size: 16px;
+      }
+
+      .title {
+        font-size: 28px;
+      }
+
+      .venue {
+        font-size: 20px;
+      }
+
+      .authors {
+        font-size: 18px;
+        gap: 6px 24px;
+      }
+
+      .links {
+        font-size: 20px;
+      }
+
+      h1 {
+        font-size: 26px;
+      }
+
+      .text,
+      .caption,
+      .tldr {
+        text-align: left;
+      }
+
+      .tldr {
+        font-size: 17px;
+      }
+
+      pre.bibtex {
+        font-size: 14px;
+      }
     }
   </style>
 </head>
@@ -108,25 +381,36 @@
 
   <!-- To link an author's homepage, wrap the name: <a href="https://...">Name</a> -->
   <div class="authors">
-    <span>Ivan Jaen Marquez</span>
+    <span>Iván Jaen Márquez</span>
     <span>Sotirios Panagiotis Chytas</span>
     <span>Vikas Singh</span>
   </div>
   <img class="logo" src="resources/uw-logo.svg" alt="University of Wisconsin&ndash;Madison logo">
 
-  <!-- [Paper] points to the local PDF. Swap in the arXiv link when you have one.
-       [OpenReview]: paste the forum link into href="" when the reviews are public, for example
-       href="https://openreview.net/forum?id=XXXXXXXXXX". Until then it shows in gray and does nothing. -->
+  <!-- [Paper] points to the arXiv abstract page (arXiv:2611.22218).
+       [Slides] and [Poster] are the files on the NeurIPS virtual site
+       (https://neurips.cc/virtual/2026/loc/sydney/poster/155066).
+       [OpenReview] points to the paper's OpenReview forum.
+       A link left as href="" shows in gray and does nothing (handy for links that are not ready yet). -->
   <div class="links">
-    <a href="resources/paper.pdf">[Paper]</a>
-    <a href="">[OpenReview]</a>
+    <a href="https://arxiv.org/abs/2611.22218">[Paper]</a>
+    <a href="https://openreview.net/forum?id=8isvAhvCFo">[OpenReview]</a>
+    <a href="https://neurips.cc/media/neurips-2026/Slides/155066.pdf">[Slides]</a>
+    <a href="https://neurips.cc/media/PosterPDFs/NeurIPS%202026/155066.png">[Poster]</a>
     <a href="https://github.com/vsingh-group/TOR-OT">[Code]</a>
     <a href="https://huggingface.co/ivanjaenm/torot-1d">[Model]</a>
-    <a id="video-link" href="#video">[Video]</a>
-    <a href="resources/torot2026.bib" download="torot2026.bib">[Bibtex]</a>
   </div>
 
-  <img class="fig" src="resources/architecture.gif" alt="Animated ToR-OT architecture: a set encoder reads the source and target histograms and the cost type; a Transformer decoder emits each row of the plan as tokens, filling the predicted plan row by row." style="width: 1050px;">
+  <div class="tldr">
+    <b>TL;DR:</b> ToR-OT (<b>To</b>ken <b>R</b>egression for <b>O</b>ptimal <b>T</b>ransport) is a Transformer that
+    predicts discrete OT plans instead of solving an optimization problem for each new pair. It writes the sparse plan
+    row by row as token sequences, emitting only nonzero entries. One pretrained model handles multiple costs,
+    generalizes to unseen instances without retraining, and improves accuracy over neural OT baselines.
+  </div>
+
+  <img class="fig fig-wide" src="resources/architecture.gif"
+    alt="Animated ToR-OT architecture: a set encoder reads the source and target histograms and the cost type; a Transformer decoder emits each row of the plan as tokens, filling the predicted plan row by row."
+    style="width: 1250px;">
   <p class="caption">
     ToR-OT generates the plan one row at a time, and each row is conditioned on the previous rows. For row
     \(i\), a set encoder embeds the cost type, the source bins \(i, \dots, n\), and every target bin \(j\)
@@ -140,11 +424,11 @@
   <!-- VIDEO. When the video is online, paste its link into data-video below, for example
        data-video="https://slideslive.com/39012345/learning-optimal-transport-plans". SlidesLive does not
        allow NeurIPS videos to be embedded on other sites, so the box becomes a thumbnail that opens the
-       video, and [Video] at the top links straight to it. A YouTube link is embedded in the page instead.
-       Left empty, the box says "Video coming soon". -->
+       video. A YouTube link is embedded in the page instead.
+       Left empty, the box says "SlidesLive video recording coming soon". -->
   <h1 id="video">Video</h1>
   <div class="video" id="video-frame" data-video="">
-    <div class="video-placeholder">Video coming soon</div>
+    <div class="video-placeholder">SlidesLive video recording coming soon</div>
   </div>
 
   <hr>
@@ -172,7 +456,9 @@
   <hr>
 
   <h1>Discrete Optimal Transport</h1>
-  <img class="fig" src="resources/ot_instance.png" alt="A toy discrete optimal transport problem: source and target histograms, the sparse optimal plan, and the cost matrix." style="width: 560px;">
+  <img class="fig" src="resources/ot_instance.png"
+    alt="A toy discrete optimal transport problem: source and target histograms, the sparse optimal plan, and the cost matrix."
+    style="width: 560px;">
   <p class="caption">
     A discrete OT instance: source and target measures, the cost matrix \(C\), and the optimal plan \(\pi^*\).
     An optimal plan exists with at most \(n + m - 1\) nonzeros, so ToR-OT predicts only the
@@ -182,7 +468,9 @@
   <hr>
 
   <h1>Results on 1D Distributions</h1>
-  <img class="fig" src="resources/results_1d.png" alt="Bar charts of MAPE for NeuralOT, UNOT, Meta OT and ToR-OT on six cost types, for the test set and the out-of-distribution set, with example source and target histograms and predicted plans." style="width: 1000px;">
+  <img class="fig" src="resources/results_1d.png"
+    alt="Bar charts of MAPE for NeuralOT, UNOT, Meta OT and ToR-OT on six cost types, for the test set and the out-of-distribution set, with example source and target histograms and predicted plans."
+    style="width: 1000px;">
   <p class="caption">
     Test set (top row) and out-of-distribution set (bottom row) at \(n = m = 30\) bins. Left: mean
     absolute percentage error (MAPE) of each method on six cost types, each scored against the solution of the
@@ -194,7 +482,9 @@
   <hr>
 
   <h1>Feasibility and Out-of-Distribution Pairs</h1>
-  <img class="fig" src="resources/feasibility_ood.png" alt="Panel A: box plots of row and column marginal violations. Panels B and C: heatmaps of per-pair improvement over Meta OT in 1D and 2D. Panel D: mean MAPE of every method on the 2D sets." style="width: 1000px;">
+  <img class="fig" src="resources/feasibility_ood.png"
+    alt="Panel A: box plots of row and column marginal violations. Panels B and C: heatmaps of per-pair improvement over Meta OT in 1D and 2D. Panel D: mean MAPE of every method on the 2D sets."
+    style="width: 1000px;">
   <p class="caption">
     <b>(A)</b> Marginal violations on the test set, with no hard constraint enforcement: the median is about
     0.1% of the total mass, and no instance exceeds 1%.
@@ -211,7 +501,9 @@
   <hr>
 
   <h1>Results on 2D Distributions</h1>
-  <img class="fig" src="resources/results_2d.png" alt="A 2D example: Swiss roll source and standard normal target on a 6 by 6 grid, the cost matrix, and the plans from POT, ToR-OT, NeuralOT and Meta OT." style="width: 1000px;">
+  <img class="fig" src="resources/results_2d.png"
+    alt="A 2D example: Swiss roll source and standard normal target on a 6 by 6 grid, the cost matrix, and the plans from POT, ToR-OT, NeuralOT and Meta OT."
+    style="width: 1000px;">
   <p class="caption">
     A 2D OOD pair (Swiss roll &rarr; Standard normal, \(\ell_2^2\) cost) on a \(6 \times 6\)
     grid, with the plans over the 36 flattened bins. The 2D model uses the same architecture and training
@@ -238,11 +530,23 @@
     <div class="table-wrap">
       <table class="cx-table">
         <thead>
-          <tr><th>Sparsity pattern</th><th>Tokens \(\sum_i K_i\)</th><th>Self-attention \(\sum_i K_i^2\)</th></tr>
+          <tr>
+            <th>Sparsity pattern</th>
+            <th>Tokens \(\sum_i K_i\)</th>
+            <th>Self-attention \(\sum_i K_i^2\)</th>
+          </tr>
         </thead>
         <tbody>
-          <tr><td>Typical, short rows: \(K_i = O(1)\)</td><td>\(O(n)\)</td><td>\(O(n)\), linear</td></tr>
-          <tr><td>Worst case, one dense row: \(K_1 = O(n)\), \(K_{i &gt; 1} = O(1)\)</td><td>\(O(n)\)</td><td>\(O(n^2)\)</td></tr>
+          <tr>
+            <td>Typical, short rows: \(K_i = O(1)\)</td>
+            <td>\(O(n)\)</td>
+            <td>\(O(n)\), linear</td>
+          </tr>
+          <tr>
+            <td>Worst case, one dense row: \(K_1 = O(n)\), \(K_{i &gt; 1} = O(1)\)</td>
+            <td>\(O(n)\)</td>
+            <td>\(O(n^2)\)</td>
+          </tr>
         </tbody>
       </table>
     </div>
@@ -255,7 +559,9 @@
   <hr>
 
   <h1>Amortized Runtime</h1>
-  <img class="fig" src="resources/runtime.png" alt="Amortized time per problem for ToR-OT, including training, falls below NeuralOT's constant per-problem time after about 100 problems." style="width: 760px;">
+  <img class="fig" src="resources/runtime.png"
+    alt="Amortized time per problem for ToR-OT, including training, falls below NeuralOT's constant per-problem time after about 100 problems."
+    style="width: 760px;">
   <p class="caption">
     Amortized time per problem, with ToR-OT's pretraining cost spread over the number of problems solved.
     NeuralOT trains a new network for every pair (about 2,600 s each), while ToR-OT generates a plan in
@@ -267,18 +573,19 @@
   <hr>
 
   <div class="bibtex-title">Bibtex</div>
-<pre class="bibtex">@inproceedings{jaenmarquez2026torot,
+  <pre class="bibtex">@inproceedings{jaenmarquez2026torot,
   title={Learning Optimal Transport Plans Via Autoregressive Token Regression},
   author={Jaen Marquez, Ivan and Chytas, Sotirios Panagiotis and Singh, Vikas},
-  booktitle={Advances in Neural Information Processing Systems},
-  year={2026}
+  booktitle={The Fortieth Annual Conference on Neural Information Processing Systems},
+  year={2026},
+  url={https://openreview.net/forum?id=8isvAhvCFo}
 }</pre>
 
   <hr>
 
   <h1>Acknowledgements</h1>
   <div class="text footer">
-    <p>Marquez, Chytas and Singh were supported in part by NIH R01 AG092220.</p>
+    <p>Márquez, Chytas and Singh were supported in part by NIH R01 AG092220.</p>
     <p>
       The template of this project webpage was originally made by
       <a href="http://web.mit.edu/phillipi/">Phillip Isola</a> and
@@ -313,18 +620,19 @@
       } else {
         // SlidesLive (NeurIPS) and most other hosts refuse to be embedded here: link out instead
         var host = "the video page";
-        try { host = /(^|\.)slideslive\./.test(new URL(url).hostname) ? "SlidesLive" : new URL(url).hostname.replace(/^www\./, ""); } catch (e) {}
+        try { host = /(^|\.)slideslive\./.test(new URL(url).hostname) ? "SlidesLive" : new URL(url).hostname.replace(/^www\./, ""); } catch (e) { }
         el = document.createElement("a");
         el.className = "video-card";
         el.href = url; el.target = "_blank"; el.rel = "noopener";
         el.innerHTML = '<span class="play"></span><span class="label"></span>';
         el.querySelector(".label").textContent = "Watch on " + host;
-        var top = document.getElementById("video-link");
-        top.href = url; top.target = "_blank"; top.rel = "noopener";
+        var top = document.getElementById("video-link");   // optional [Video] link at the top
+        if (top) { top.href = url; top.target = "_blank"; top.rel = "noopener"; }
       }
       box.replaceChildren(el);
     })();
   </script>
 
 </body>
+
 </html>
